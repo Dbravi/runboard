@@ -548,3 +548,25 @@ test('after a finished run, a reload clears the band', async ($, on) => {
   expect(await text(ui, /passed/)).toBeUndefined()
   await ui.unmount()
 })
+
+for (const [name, output, needsList] of [
+  ['line/html reporter progress', 'Running 2 tests using 2 workers\n\n[1/2] [chromium] › tests\\example.spec.ts:3:5 › has title\n', true],
+  ['dot reporter summary', 'Running 2 tests using 1 worker\n··\n  2 passed (1.0s)\n', true],
+  ['a run stopped before any test finished', 'Running 2 tests using 1 worker\n\n[killed]\n', false],
+  ['list reporter output', MIDWAY, false],
+] as const) {
+  test(`${needsList ? 'asks' : 'does not ask'} for the list reporter: ${name}`, async ($, on) => {
+    const clock = mock.clock(on)
+    on('tool.call', () => BACKGROUNDED)
+    on('ui.render', () => ({ type: 'Box', children: [] }))
+    on('fs.read', () => ({ value: output }))
+
+    await $.tool.call({ tool: 'Bash', command: 'npx playwright test' })
+    await clock.advance(2_000)
+
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    expect((await text(ui, /needs the list reporter/)) !== undefined).toBe(needsList)
+    expect((await text(ui, /passed/)) !== undefined).toBe(!needsList)
+    await ui.unmount()
+  })
+}

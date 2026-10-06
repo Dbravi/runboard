@@ -9,6 +9,7 @@ export type RunCounts = {
   failed: number
   flaky: number
   skipped: number
+  needsListReporter: boolean
   hasRetries: boolean
   command: string
   taskId: string | null

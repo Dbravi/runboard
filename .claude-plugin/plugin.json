@@ -1,6 +1,6 @@
 {
   "name": "runboard",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Runboard: live Playwright run dashboard above the prompt — progress, squares, stop, failure details, traces and the report",
   "author": {
     "name": "Damian Bravi"

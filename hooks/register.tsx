@@ -26,6 +26,8 @@ const TITLE_PARTS = /^\[[^\]]+\]\s+›\s+(?:\S*[\\/])?([^\\/\s]+):(\d+):\d+\s+�
 const ANSI_CODES = /\x1b\[[0-9;?]*[A-Za-z]/g
 const RUN_LINE = /Running (\d+) tests? using (\d+) workers?/
 const SUMMARY_LINE = /^\s+\d+ (?:passed|failed|flaky|skipped|interrupted|did not run)\b/m
+// The line/html reporters' "[3/15] …" progress; with no ✓/✘ lines it means the list reporter isn't on.
+const PROGRESS_LINE = /^\[\d+\/\d+\]\s/m
 // What Claude Code appends to a background task's output file when the command ends or is stopped.
 const TASK_END_LINE = /^\[(?:killed|exited with code \d+)\]$/m
 const OUTPUT_PATH = /Output is being written to: (\S+\.output)/
@@ -99,6 +101,7 @@ const tally = (output: string) => {
         ? [{ mark, title, duration: durations.get(title) ?? '', error: '', trace: '', ...details.get(title) }]
         : [],
     ),
+    needsListReporter: all.length === 0 && (PROGRESS_LINE.test(output) || SUMMARY_LINE.test(output)),
     isDone: SUMMARY_LINE.test(output) || TASK_END_LINE.test(output),
   }
 }
@@ -308,6 +311,22 @@ export const register: Register = on => {
     const rows = Array.from({ length: Math.ceil(cells.length / ROW_SQUARES) }, (_, row) =>
       cells.slice(row * ROW_SQUARES, (row + 1) * ROW_SQUARES),
     )
+
+    if (run.needsListReporter) {
+      return (
+        <Box flexDirection="column">
+          <Text dimColor wrap="truncate-end">
+            $ {run.command}
+          </Text>
+          <Box>
+            <Text color={PLAYWRIGHT_RED}>Run</Text>
+            <Text color={PLAYWRIGHT_GREEN}>board</Text>
+            <Text> needs the list reporter in playwright.config: </Text>
+            <Text bold>reporter: [['list'], ['html']]</Text>
+          </Box>
+        </Box>
+      )
+    }
 
     return (
       <Box flexDirection="column">
