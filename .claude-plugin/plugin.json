@@ -1,0 +1,9 @@
+{
+  "name": "runboard",
+  "version": "0.1.0",
+  "description": "Runboard: live Playwright run dashboard above the prompt — progress, squares, stop, failure details, traces and the report",
+  "author": {
+    "name": "Damian Bravi"
+  },
+  "types": "./types/index.d.ts"
+}

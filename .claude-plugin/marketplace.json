@@ -1,0 +1,13 @@
+{
+  "name": "runboard",
+  "description": "Runboard: a live Playwright run dashboard above the Claude Code prompt",
+  "owner": {
+    "name": "Damian Bravi"
+  },
+  "plugins": [
+    {
+      "name": "runboard",
+      "source": "./"
+    }
+  ]
+}
