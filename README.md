@@ -44,6 +44,7 @@ then `/reload-plugins` in a running session.
 - **Claude Code 2.1.291 or newer** (`claude update`).
 - **The Playwright `list` reporter** in `playwright.config.ts`. Runboard reads its output; with only
   `dot`, `line` or `html` the band stays at 0. Playwright uses `list` by default locally and `dot` on CI.
+  With `reporter: 'html'` alone, use `reporter: [['list'], ['html']]`.
 - **Runs started by Claude.** Runboard sees commands Claude runs, not the ones you type in your own
   terminal. Live updates need a background run (Claude starts long runs that way); a foreground run
   only shows the final result.

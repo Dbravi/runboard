@@ -21,7 +21,9 @@ const ETA_AFTER = 5
 
 const RESULT_LINE = /^\s*([✓✘-])\s+\d+\s+(.+?)(?:\s+\(retry #\d+\))?(?:\s+\(([\d.]+(?:ms|s|m|h))\))?\s*$/
 // "[chromium] › tests/a/b.spec.ts:39:13 › Describe › Test @tag" → "b.spec.ts:39" and "Describe › Test"
-const TITLE_PARTS = /^\[[^\]]+\]\s+›\s+(?:\S*\/)?([^/\s]+):(\d+):\d+\s+›\s+(.*?)(?:\s+@\S+)*$/
+const TITLE_PARTS = /^\[[^\]]+\]\s+›\s+(?:\S*[\\/])?([^\\/\s]+):(\d+):\d+\s+›\s+(.*?)(?:\s+@\S+)*$/
+// Colour and cursor codes Playwright writes when it thinks it has a terminal (seen on Windows).
+const ANSI_CODES = /\x1b\[[0-9;?]*[A-Za-z]/g
 const RUN_LINE = /Running (\d+) tests? using (\d+) workers?/
 const SUMMARY_LINE = /^\s+\d+ (?:passed|failed|flaky|skipped|interrupted|did not run)\b/m
 // What Claude Code appends to a background task's output file when the command ends or is stopped.
@@ -180,7 +182,7 @@ const track = ($: EngineInterface, followed: Followed) => {
     }
 
     const now = await $.clock.now()
-    const { isDone, ...tallied } = tally(output)
+    const { isDone, ...tallied } = tally(output.replace(ANSI_CODES, ''))
     if (output !== seen) {
       seen = output
       changedAt = now

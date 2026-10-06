@@ -423,6 +423,39 @@ test('Details shows the last error of each failure and opens its trace', async (
   expect(spawned).toEqual([['npx', 'playwright', 'show-trace', 'reports/test-results/a-WS03-retry1/trace.zip']])
 })
 
+test('colour codes and Windows paths in the output still parse', async ($, on) => {
+  const clock = mock.clock(on)
+  const output = [
+    'Running 2 tests using 2 workers',
+    '',
+    '\x1b[1A\x1b[2K  \x1b[32m✓\x1b[39m  1 [chromium] › tests\\a.spec.ts:10:5 › A › One (1.0s)',
+    '\x1b[1A\x1b[2K  \x1b[31m✘\x1b[39m  2 [chromium] › tests\\sub\\b.spec.ts:20:5 › B › Two (2.0s)',
+    '',
+    '\x1b[1A\x1b[2K  1) [chromium] › tests\\sub\\b.spec.ts:20:5 › B › Two ',
+    '',
+    '    Error: boom',
+    '',
+    '\x1b[1A\x1b[2K  \x1b[31m1 failed\x1b[39m',
+    '\x1b[1A\x1b[2K  \x1b[32m1 passed\x1b[39m (2.1s)',
+    '',
+  ].join('\n')
+  on('tool.call', () => BACKGROUNDED)
+  on('ui.render', () => ({ type: 'Box', children: [] }))
+  on('fs.read', () => ({ value: output }))
+
+  await $.tool.call({ tool: 'Bash', command: 'npx playwright test' })
+  await clock.advance(2_000)
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await text(ui, /done/)).toBeDefined()
+  expect(await text(ui, /1 passed/)).toBeDefined()
+  expect(await text(ui, /1 failed/)).toBeDefined()
+  await ui.press({ key: 'details' })
+  expect(await text(ui, /^✘ b\.spec\.ts:20  B › Two  2\.0s/)).toBeDefined()
+  expect(await text(ui, /^  boom$/)).toBeDefined()
+  await ui.unmount()
+})
+
 test('Details starts closed on every new run', async ($, on) => {
   const clock = mock.clock(on)
   on('tool.call', () => BACKGROUNDED)
