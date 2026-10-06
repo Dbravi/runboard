@@ -20,11 +20,16 @@ $ ENV=local npx playwright test --project=chromium --grep @smoke --retries=1
 
 ## Install
 
+In your terminal:
+
 ```
-/plugin install runboard --marketplace Dbravi/runboard
+claude update
+claude plugin marketplace add Dbravi/runboard
+claude plugin install runboard@runboard
 ```
 
-Answer `y` to add the marketplace, then pick a scope (user is the default). It is active right away.
+`claude update` matters: older Claude Code versions fail to load the mod (`"session.start" is not an
+event`). It is active in the next session you start.
 
 Update to the latest version:
 
@@ -36,7 +41,7 @@ then `/reload-plugins` in a running session.
 
 ## Requirements
 
-- **Claude Code with mods support** (built and tested on 2.1.291).
+- **Claude Code 2.1.291 or newer** (`claude update`).
 - **The Playwright `list` reporter** in `playwright.config.ts`. Runboard reads its output; with only
   `dot`, `line` or `html` the band stays at 0. Playwright uses `list` by default locally and `dot` on CI.
 - **Runs started by Claude.** Runboard sees commands Claude runs, not the ones you type in your own
