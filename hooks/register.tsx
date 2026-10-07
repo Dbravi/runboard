@@ -15,7 +15,7 @@ const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 const PLAYWRIGHT_GREEN = '#2EAD33'
 const PLAYWRIGHT_RED = '#D65348'
 const IDLE_MS = 600_000
-const HIDE_MS = 240_000
+const HIDE_MS = 180_000
 const ROW_SQUARES = 50
 const ETA_AFTER = 5
 

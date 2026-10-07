@@ -67,7 +67,7 @@ test('a background run is counted live from its output file', async ($, on) => {
   }
 })
 
-test('a passing retry turns its failed attempt flaky, and the band clears four minutes after the summary', async ($, on) => {
+test('a passing retry turns its failed attempt flaky, and the band clears three minutes after the summary', async ($, on) => {
   const clock = mock.clock(on)
   on('tool.call', () => BACKGROUNDED)
   on('ui.render', () => ({ type: 'Box', children: [] }))
@@ -94,7 +94,7 @@ test('a passing retry turns its failed attempt flaky, and the band clears four m
   expect(await text(done, / · 4\/4$/)).toBeDefined()
   await done.unmount()
 
-  await clock.advance(240_000)
+  await clock.advance(180_000)
 
   const cleared = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await text(cleared, /passed/)).toBeUndefined()

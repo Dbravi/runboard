@@ -17,7 +17,7 @@ $ ENV=local npx playwright test --project=chromium --grep @smoke --retries=1
 - `Stop run` interrupts the run as Ctrl+C does, so the report still covers the tests that ran; once it
   ends, `Open report` opens the HTML report.
 - `Details` lists failed and flaky tests with their error and a `Trace` button that opens the trace.
-- Keeps following the run through `/reload-plugins`; clears itself 4 minutes after the run ends.
+- Keeps following the run through `/reload-plugins`; clears itself 3 minutes after the run ends.
 
 ## Install
 

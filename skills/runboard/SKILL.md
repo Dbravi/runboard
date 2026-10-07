@@ -39,4 +39,4 @@ with traces, and `Open report` once the run ends. You don't call it; it reacts t
   pulsing blue running (one per worker), dim not run yet.
 - `Details` lists failed and flaky tests with their last error and a `Trace` button; it appears only
   when something failed, and errors and traces only once the run has ended.
-- The band clears itself 4 minutes after the run ends.
+- The band clears itself 3 minutes after the run ends.
