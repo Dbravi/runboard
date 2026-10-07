@@ -25,8 +25,9 @@ with traces, and `Open report` once the run ends. You don't call it; it reacts t
 
 - Don't poll the output file to narrate progress; the user is watching the band. Report the result
   when the background task's completion notification arrives.
-- To stop a run, stop its background task (TaskStop). The band switches to `done` within ~2 seconds.
-  The user can also press `Stop run` on the band.
+- To stop a run, press `Stop run` on the band, or tell the user to: it interrupts the run with SIGINT,
+  as Ctrl+C does, so Playwright finishes writing the HTML report for the tests that did run. Stopping
+  the background task with TaskStop kills it outright and leaves no report.
 - `/reload-plugins` doesn't lose the run: Runboard resumes following it after a reload.
 
 ## Reading the band when the user asks

@@ -161,6 +161,18 @@ const openReport = async ($: EngineInterface) => {
   for await (const chunk of child) void chunk
 }
 
+// SIGINT the run's whole process group, as Ctrl+C does, so Playwright runs its reporters and writes the
+// report; the bracket in the pattern keeps this shell from matching itself. TaskStop only kills outright.
+const SIGINT_RUN = `pgid=$(ps -o pgid= -p "$(pgrep -f 'playwright[ ]test' | head -1)" 2>/dev/null | tr -d ' ')
+[ -n "$pgid" ] && kill -INT -"$pgid"`
+
+const stopRun = async ($: EngineInterface, taskId: string | null) => {
+  const stopped = await $.process.run(['sh', '-c', SIGINT_RUN]).then(({ exitCode }) => exitCode === 0, () => false)
+  if (!stopped && taskId !== null) {
+    await $.tool.call({ tool: 'TaskStop', task_id: taskId })
+  }
+}
+
 let timer: Timer | null = null
 let hideTimer: Timer | null = null
 let frameTimer: Timer | null = null
@@ -372,7 +384,7 @@ export const register: Register = on => {
                 label="Stop run"
                 plain
                 hover={{ color: 'white', backgroundColor: '#8B0000' }}
-                onPress={() => void $.tool.call({ tool: 'TaskStop', task_id: run.taskId ?? undefined })}
+                onPress={() => void stopRun($, run.taskId)}
               />
               <Text> ]</Text>
             </Box>

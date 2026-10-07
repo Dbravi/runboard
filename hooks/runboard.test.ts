@@ -249,7 +249,40 @@ test('the running squares blink while the run is active', async ($, on) => {
   expect([colorBefore, (await spinner())?.props.color].sort()).toEqual(['#2EAD33', '#D65348'])
 })
 
-test('the stop button stops the run through TaskStop', async ($, on) => {
+test('the stop button interrupts the run with SIGINT so the report is written', async ($, on) => {
+  const clock = mock.clock(on)
+  const stopped: unknown[] = []
+  const signalled: string[][] = []
+  on('tool.call', ($, e) => {
+    if (e.tool === 'TaskStop') {
+      stopped.push(e)
+
+      return { result: { message: 'stopped' } }
+    }
+
+    return BACKGROUNDED
+  })
+  on('process.run', ($, e) => {
+    signalled.push([...e.argv])
+
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('ui.render', () => ({ type: 'Box', children: [] }))
+  on('fs.read', () => ({ value: MIDWAY }))
+
+  await $.tool.call({ tool: 'Bash', command: 'npx playwright test --project=chromium' })
+  await clock.advance(2_000)
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /^● $/ }))?.props.color).toBe('red')
+  await ui.press({ key: 'stop' })
+  await ui.unmount()
+
+  expect(signalled).toEqual([['sh', '-c', expect.stringContaining('kill -INT -"$pgid"')]])
+  expect(stopped).toEqual([])
+})
+
+test('the stop button falls back to TaskStop when no run process is found', async ($, on) => {
   const clock = mock.clock(on)
   const stopped: unknown[] = []
   on('tool.call', ($, e) => {
@@ -261,6 +294,7 @@ test('the stop button stops the run through TaskStop', async ($, on) => {
 
     return BACKGROUNDED
   })
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('ui.render', () => ({ type: 'Box', children: [] }))
   on('fs.read', () => ({ value: MIDWAY }))
 
@@ -268,7 +302,6 @@ test('the stop button stops the run through TaskStop', async ($, on) => {
   await clock.advance(2_000)
 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /^● $/ }))?.props.color).toBe('red')
   await ui.press({ key: 'stop' })
   await ui.unmount()
 

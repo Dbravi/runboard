@@ -14,7 +14,8 @@ $ ENV=local npx playwright test --project=chromium --grep @smoke --retries=1
 - One square per test: green passed, red failed, yellow flaky (passed on retry), hollow skipped,
   pulsing blue running, dim not run yet.
 - Progress, counts, elapsed time and an ETA once 5 tests are done.
-- `Stop run` stops the run; once it ends, `Open report` opens the HTML report.
+- `Stop run` interrupts the run as Ctrl+C does, so the report still covers the tests that ran; once it
+  ends, `Open report` opens the HTML report.
 - `Details` lists failed and flaky tests with their error and a `Trace` button that opens the trace.
 - Keeps following the run through `/reload-plugins`; clears itself 4 minutes after the run ends.
 
@@ -60,7 +61,9 @@ then `/reload-plugins` in a running session.
 
 - Ships a `runboard` skill that tells Claude how to start runs so the band works (background, no
   `--reporter`, one run at a time). It loads automatically with the plugin.
-- `Stop run` goes through Claude Code's permission check, so the first press may ask for approval.
+- `Stop run` sends SIGINT to the run's process group and falls back to stopping the background task if
+  no run process is found. It goes through Claude Code's permission check, so the first press may ask
+  for approval.
 - `Open report` runs `npx playwright show-report`, passing the html reporter's `outputFolder` from
   `playwright.config` when it sets one (otherwise Playwright's default `playwright-report`).
 - Pass no `--reporter` flag to `playwright test`: it replaces the config's reporters, so no HTML
