@@ -19,7 +19,7 @@ const HIDE_MS = 180_000
 const ROW_SQUARES = 50
 const ETA_AFTER = 5
 
-const RESULT_LINE = /^\s*([✓✘-])\s+\d+\s+(.+?)(?:\s+\(retry #\d+\))?(?:\s+\(([\d.]+(?:ms|s|m|h))\))?\s*$/
+const RESULT_LINE = /^\s*([✓✘-])\s+\d+\s+(.+?)(?:\s+\(retry #(\d+)\))?(?:\s+\(([\d.]+(?:ms|s|m|h))\))?\s*$/
 // "[chromium] › tests/a/b.spec.ts:39:13 › Describe › Test @tag" → "b.spec.ts:39" and "Describe › Test"
 const TITLE_PARTS = /^\[[^\]]+\]\s+›\s+(?:\S*[\\/])?([^\\/\s]+):(\d+):\d+\s+›\s+(.*?)(?:\s+@\S+)*$/
 // Colour and cursor codes Playwright writes when it thinks it has a terminal (seen on Windows).
@@ -70,20 +70,26 @@ const failureDetails = (output: string) => {
 }
 
 const tally = (output: string) => {
-  // Keyed by title, so a retry replaces the attempt before it; a pass after a failure is flaky.
-  const marks = new Map<string, Mark>()
-  const durations = new Map<string, string>()
+  // Keyed by title and occurrence, so a retry replaces the attempt before it and a pass after a failure
+  // is flaky, while `--repeat-each` repeats of one title each keep their own square.
+  const results = new Map<string, { title: string; mark: Mark; duration: string }>()
+  const occurrences = new Map<string, number>()
   for (const line of output.split('\n')) {
     const match = RESULT_LINE.exec(line)
     if (match?.[1] !== undefined && match[2] !== undefined) {
-      const before = marks.get(match[2])
+      const title = match[2]
+      const seen = occurrences.get(title) ?? 0
+      // Only "(retry #n)" reruns the same occurrence; anything else is the next one.
+      const nth = match[3] === undefined ? seen + 1 : seen
+      occurrences.set(title, nth)
+      const key = `${title}#${nth}`
+      const before = results.get(key)?.mark
       const isFlaky = match[1] === '✓' && (before === '✘' || before === '~')
-      marks.set(match[2], isFlaky ? '~' : (match[1] as Mark))
-      durations.set(match[2], match[3] ?? '')
+      results.set(key, { title, mark: isFlaky ? '~' : (match[1] as Mark), duration: match[4] ?? '' })
     }
   }
 
-  const all = [...marks.values()]
+  const all = [...results.values()].map(result => result.mark)
   const started = RUN_LINE.exec(output)
   const total = Number(started?.[1] ?? all.length)
   const details = failureDetails(output)
@@ -96,10 +102,8 @@ const tally = (output: string) => {
     remaining: Math.max(0, total - all.length),
     workers: Number(started?.[2] ?? 0),
     marks: all,
-    problems: [...marks].flatMap(([title, mark]): Problem[] =>
-      mark === '✘' || mark === '~'
-        ? [{ mark, title, duration: durations.get(title) ?? '', error: '', trace: '', ...details.get(title) }]
-        : [],
+    problems: [...results.values()].flatMap(({ title, mark, duration }): Problem[] =>
+      mark === '✘' || mark === '~' ? [{ mark, title, duration, error: '', trace: '', ...details.get(title) }] : [],
     ),
     needsListReporter: all.length === 0 && (PROGRESS_LINE.test(output) || SUMMARY_LINE.test(output)),
     isDone: SUMMARY_LINE.test(output) || TASK_END_LINE.test(output),

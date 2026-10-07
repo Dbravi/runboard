@@ -643,3 +643,85 @@ for (const [label, background, command, passedOn] of [
     await ui.unmount()
   })
 }
+
+const REPEATED = `Running 4 tests using 1 worker
+
+  ✓  1 [chromium] › tests/a.spec.ts:10:5 › A › WS01 - Browses @shop (29.8s)
+  ✓  2 [chromium] › tests/a.spec.ts:10:5 › A › WS01 - Browses @shop (28.1s)
+  ✓  3 [chromium] › tests/a.spec.ts:10:5 › A › WS01 - Browses @shop (27.4s)
+  ✓  4 [chromium] › tests/a.spec.ts:10:5 › A › WS01 - Browses @shop (26.9s)
+
+  4 passed (1.9m)
+`
+
+test('--repeat-each repeats of one title each keep their own square', async ($, on) => {
+  const clock = mock.clock(on)
+  on('tool.call', () => BACKGROUNDED)
+  on('ui.render', () => ({ type: 'Box', children: [] }))
+  on('fs.read', () => ({ value: REPEATED }))
+
+  await $.tool.call({ tool: 'Bash', command: 'npx playwright test --repeat-each=4' })
+  await clock.advance(2_000)
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await text(ui, /4 passed/)).toBeDefined()
+  expect(await text(ui, /flaky/)).toBeUndefined()
+  expect(await text(ui, / · 4\/4$/)).toBeDefined()
+  const cells = await ui.findAll({ type: 'Text', text: /^■ $/ })
+  expect(cells.map(cell => cell.props.color)).toEqual(['green', 'green', 'green', 'green'])
+  await ui.unmount()
+})
+
+const REPEATED_WITH_RETRY = `Running 3 tests using 1 worker
+
+  ✘  1 [chromium] › tests/a.spec.ts:10:5 › A › WS01 - Browses @shop (1.0s)
+  ✓  2 [chromium] › tests/a.spec.ts:10:5 › A › WS01 - Browses @shop (retry #1) (1.1s)
+  ✓  3 [chromium] › tests/a.spec.ts:10:5 › A › WS01 - Browses @shop (1.2s)
+  ✘  4 [chromium] › tests/a.spec.ts:10:5 › A › WS01 - Browses @shop (1.3s)
+
+  1 flaky
+  1 passed
+  1 failed
+`
+
+test('a retry folds into its own repeat, while later repeats of the same title stand apart', async ($, on) => {
+  const clock = mock.clock(on)
+  on('tool.call', () => BACKGROUNDED)
+  on('ui.render', () => ({ type: 'Box', children: [] }))
+  on('fs.read', () => ({ value: REPEATED_WITH_RETRY }))
+
+  await $.tool.call({ tool: 'Bash', command: 'npx playwright test --repeat-each=3 --retries=1' })
+  await clock.advance(2_000)
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await text(ui, /1 passed/)).toBeDefined()
+  expect(await text(ui, /1 failed/)).toBeDefined()
+  expect(await text(ui, /1 flaky/)).toBeDefined()
+  // The retry replaced its own attempt, so three repeats leave three squares, not four.
+  const cells = await ui.findAll({ type: 'Text', text: /^■ $/ })
+  expect(cells.map(cell => cell.props.color)).toEqual(['yellow', 'green', 'red'])
+  await ui.unmount()
+})
+
+test('each failing repeat is listed separately in Details, with its own duration', async ($, on) => {
+  const clock = mock.clock(on)
+  const output = `Running 2 tests using 1 worker
+
+  ✘  1 [chromium] › tests/a.spec.ts:10:5 › A › WS01 - Browses @shop (1.0s)
+  ✘  2 [chromium] › tests/a.spec.ts:10:5 › A › WS01 - Browses @shop (2.5s)
+
+  2 failed (4.0s)
+`
+  on('tool.call', () => BACKGROUNDED)
+  on('ui.render', () => ({ type: 'Box', children: [] }))
+  on('fs.read', () => ({ value: output }))
+
+  await $.tool.call({ tool: 'Bash', command: 'npx playwright test --repeat-each=2' })
+  await clock.advance(2_000)
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 'details' })
+  expect(await text(ui, /1\.0s/)).toBeDefined()
+  expect(await text(ui, /2\.5s/)).toBeDefined()
+  await ui.unmount()
+})
