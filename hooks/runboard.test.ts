@@ -603,3 +603,43 @@ for (const [name, output, needsList] of [
     await ui.unmount()
   })
 }
+
+for (const [label, background, command, passedOn] of [
+  ['drops a buffering tail', true, 'npx playwright test -g "A" 2>&1 | tail -40', 'npx playwright test -g "A"'],
+  ['drops a bare tail', true, 'npx playwright test | tail -20', 'npx playwright test'],
+  ['drops a trailing head', true, 'npx playwright test 2>&1 | head -5', 'npx playwright test'],
+  [
+    'keeps a streaming grep',
+    true,
+    'npx playwright test | grep --line-buffered ✘',
+    'npx playwright test | grep --line-buffered ✘',
+  ],
+  [
+    'keeps a tail in the foreground',
+    false,
+    'npx playwright test 2>&1 | tail -40',
+    'npx playwright test 2>&1 | tail -40',
+  ],
+] as const) {
+  test(`${label}: ${command}`, async ($, on) => {
+    const clock = mock.clock(on)
+    let ran = ''
+    on('tool.call', ($, e) => {
+      if (e.tool === 'Bash') ran = e.command
+
+      return BACKGROUNDED
+    })
+    on('ui.render', () => ({ type: 'Box', children: [] }))
+    on('fs.read', () => ({ value: MIDWAY }))
+
+    await $.tool.call({ tool: 'Bash', command, ...(background ? { run_in_background: true } : {}) })
+    await clock.advance(2_000)
+
+    expect(ran).toBe(passedOn)
+    // The band showing the run is what proves the hook ran at all, so a no-change case cannot pass dead.
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    expect(await text(ui, /1 passed/)).toBeDefined()
+    expect(await text(ui, new RegExp(`^\\$ ${passedOn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`))).toBeDefined()
+    await ui.unmount()
+  })
+}

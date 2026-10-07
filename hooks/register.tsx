@@ -134,6 +134,14 @@ const isPlaywrightRun = async ($: EngineInterface, command: string) => {
   return RUNS_TESTS.test(body) && !NOT_A_RUN.test(body)
 }
 
+// A trailing pipe into a truncating reader holds the whole run until it exits, so the band would only
+// fill at the end. `grep` is left alone: a filter is deliberate, and a line-buffered one streams fine.
+const SWALLOWS_OUTPUT = /\s*(?:2>&1\s*)?\|\s*(?:tail|head|wc|less|more|cat)\b[^|&;]*$/
+
+// Only in the background, where the output file holds everything; in the foreground the pipe is the
+// caller's only output, and dropping it would hand them the entire run log instead.
+const unpiped = (command: string, background: boolean | undefined) =>
+  background === true ? command.replace(SWALLOWS_OUTPUT, '') : command
 
 const HTML_OUTPUT_FOLDER = /['"]html['"]\s*,\s*\{[^}]*?outputFolder:\s*['"]([^'"]+)['"]/
 
@@ -266,17 +274,18 @@ export const register: Register = on => {
 
     await update($, isDetailsOpen, () => false)
     await update($, following, () => null)
+    const command = unpiped(e.command, e.run_in_background)
     const followed: Followed = {
       path: '',
       taskId: null,
-      command: e.command,
+      command,
       startedAt: await $.clock.now(),
-      hasRetries: Number(/--retries[= ](\d+)/.exec(e.command)?.[1] ?? 0) > 0,
+      hasRetries: Number(/--retries[= ](\d+)/.exec(command)?.[1] ?? 0) > 0,
     }
     const tracker = track($, followed)
 
     await tracker.show('')
-    const ran = await next(e)
+    const ran = await next({ ...e, command })
     const path = OUTPUT_PATH.exec(ran.text ?? '')?.[1]
     followed.taskId = TASK_ID.exec(ran.text ?? '')?.[1] ?? null
 

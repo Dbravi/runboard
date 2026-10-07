@@ -17,6 +17,9 @@ with traces, and `Open report` once the run ends. You don't call it; it reacts t
   `ENV=local npx playwright test tests/x --project=chromium`, `npm run test:local -- --retries=1`.
 - **Never pass `--reporter`.** It replaces the config's reporters: the HTML report isn't written and
   `Open report` shows a stale one. Runboard needs the `list` reporter from the config.
+- **Don't pipe the run into `tail` or `head`.** They buffer the whole run, so nothing reaches the
+  output file until it exits. Runboard drops such a pipe from a background run; read the output file
+  afterwards instead. A line-buffered `grep` is fine and is left alone.
 - **One run at a time.** A new run takes over the band, and Playwright runs sharing an output folder
   break each other. Stop the current run first.
 - `--list` and `--ui` are ignored on purpose; they don't run tests.
