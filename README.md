@@ -3,13 +3,7 @@
 A live Playwright run dashboard above the Claude Code prompt. Ask Claude to run your tests and the
 band follows the run as it goes:
 
-```
-$ ENV=local npx playwright test --project=chromium --grep @smoke --retries=1
-⠹ Runboard 40% · 37 passed · 2 failed · 1 flaky · 1 skipped · 40/100 · 7m00s · ~10m30s left [ ● Stop run ]
-■ ■ ■ ■ ■ ■ □ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■
-■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■
-[ Details ]
-```
+![The Runboard band above the Claude Code prompt after a run: 8 passed, 2 failed, 2 flaky](docs/runboard-band.png)
 
 - One square per test: green passed, red failed, yellow flaky (passed on retry), hollow skipped,
   pulsing blue running, dim not run yet.
