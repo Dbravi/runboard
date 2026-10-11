@@ -63,8 +63,9 @@ then `/reload-plugins` in a running session.
   `playwright.config` when it sets one (otherwise Playwright's default `playwright-report`).
 - `Open report` and `Trace` run in the folder the run ran in: the session's, or where a leading
   `cd <dir> &&` in the command went (`~` and `$HOME` included). If one fails, a toast says why.
-- Pass no `--reporter` flag to `playwright test`: it replaces the config's reporters, so no HTML
-  report gets written.
+- A `--reporter` flag replaces the config's reporters for that run: `--reporter=list` writes no HTML
+  report, so `Open report` shows an old one or none. Leave the flag out, or include `html`
+  (`--reporter=list,html`).
 
 ## Development
 
