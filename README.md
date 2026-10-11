@@ -3,7 +3,7 @@
 A live Playwright run dashboard above the Claude Code prompt. Ask Claude to run your tests and the
 band follows the run as it goes:
 
-![The Runboard band above the Claude Code prompt after a run: 8 passed, 2 failed, 2 flaky](docs/runboard-band.png)
+![The Runboard band above the Claude Code prompt after a run: 8 passed, 2 failed, 2 flaky](docs/runboard-band-v2.png)
 
 - One square per test: green passed, red failed, yellow flaky (passed on retry), hollow skipped,
   pulsing blue running, dim not run yet.
