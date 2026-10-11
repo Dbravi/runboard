@@ -1,6 +1,8 @@
-export type Mark = '✓' | '✘' | '-' | '~'
+// `!` is a test the run was stopped in the middle of: Playwright marks it ✘ like a failure, and only
+// its summary tells the two apart.
+export type Mark = '✓' | '✘' | '-' | '~' | '!'
 
-export type Problem = { mark: '✘' | '~'; title: string; duration: string; error: string; trace: string }
+export type Problem = { mark: '✘' | '~' | '!'; title: string; duration: string; error: string; trace: string }
 
 // `cwd` is the folder the run ran in, absolute; absent on a run followed before it was recorded.
 export type Followed = {
@@ -17,6 +19,9 @@ export type RunCounts = {
   failed: number
   flaky: number
   skipped: number
+  interrupted: number
+  // The run ended before every test ran: Stop, --max-failures, a global timeout, a killed task.
+  isStopped: boolean
   needsListReporter: boolean
   hasRetries: boolean
   command: string

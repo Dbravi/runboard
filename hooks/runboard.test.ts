@@ -21,6 +21,13 @@ const BACKGROUNDED = {
 // The html report's index.html, written after the run started.
 const FRESH_REPORT = { value: { kind: 'file', size: 1, mtimeMs: Number.MAX_SAFE_INTEGER, isLink: false } } as const
 
+// Answers a stat of the report's index.html; no project CLI is there, so the buttons fall back to npx.
+const statReport = (_: unknown, e: { path: string }) => {
+  if (!e.path.endsWith('index.html')) throw new Error('ENOENT')
+
+  return FRESH_REPORT
+}
+
 const MIDWAY = `Running 4 tests using 1 worker
 
   ✓  1 [chromium] › tests/a.spec.ts:10:5 › A › WS01 - Browses @shop (29.8s)
@@ -151,7 +158,7 @@ test('a test that fails every attempt stays failed', async ($, on) => {
   await ui.unmount()
 })
 
-test('a new run takes over from one still being polled, and a stopped run ends as done', async ($, on) => {
+test('a new run takes over from one still being polled, and a killed run ends as stopped', async ($, on) => {
   const clock = mock.clock(on)
   const second = {
     ...BACKGROUNDED,
@@ -172,12 +179,148 @@ test('a new run takes over from one still being polled, and a stopped run ends a
   await clock.advance(2_000)
 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect(await text(ui, /done/)).toBeDefined()
+  expect(await text(ui, /^ \(stopped\) $/)).toBeDefined()
+  expect(await text(ui, /done/)).toBeUndefined()
   expect(await text(ui, /1 passed/)).toBeDefined()
   expect(await text(ui, /0 failed/)).toBeDefined()
+  expect(await text(ui, /1 not run/)).toBeDefined()
   expect(await text(ui, / · 1\/2$/)).toBeDefined()
   const cells = await ui.findAll({ type: 'Text', text: /^■ $/ })
   expect(cells.some(cell => cell.props.color === 'cyan')).toBe(false)
+  await ui.unmount()
+})
+
+// A real run stopped mid-retry (--max-failures=1, Playwright 1.59), trimmed: the retry of "greeting"
+// was interrupted, but its first attempt failed, so Playwright still counts it failed.
+const STOPPED_IN_RETRY = `Running 10 tests using 2 workers
+
+  ✓   2 [chromium] › tests/runboard-demo.spec.ts:20:5 › passing: heading is visible (954ms)
+  ✓   1 [chromium] › tests/runboard-demo.spec.ts:25:5 › passing: input accepts text (1.3s)
+  ✓   4 [chromium] › tests/runboard-demo.spec.ts:38:5 › passing: list has three items (1.1s)
+  ✓   3 [chromium] › tests/runboard-demo.spec.ts:31:5 › passing: button greets the user (1.7s)
+  ✓   6 [chromium] › tests/runboard-demo.spec.ts:48:5 › passing: output starts empty (804ms)
+  ✓   5 [chromium] › tests/runboard-demo.spec.ts:43:5 › passing: placeholder is set (2.1s)
+  ✘   7 [chromium] › tests/runboard-demo.spec.ts:53:5 › flaky: fails on first try, passes on retry (2.7s)
+  ✘   8 [chromium] › tests/runboard-demo.spec.ts:59:5 › flaky: list count only right on retry (2.1s)
+  ✓  10 [chromium] › tests/runboard-demo.spec.ts:59:5 › flaky: list count only right on retry (retry #1) (1.1s)
+  ✓   9 [chromium] › tests/runboard-demo.spec.ts:53:5 › flaky: fails on first try, passes on retry (retry #1) (1.7s)
+  ✘  12 [chromium] › tests/runboard-demo.spec.ts:72:5 › failing: missing element (2.0s)
+  ✘  11 [chromium] › tests/runboard-demo.spec.ts:65:5 › failing: greeting has the wrong name (2.3s)
+  ✘  13 [chromium] › tests/runboard-demo.spec.ts:72:5 › failing: missing element (retry #1) (2.1s)
+Testing stopped early after 1 maximum allowed failures.
+  ✘  14 [chromium] › tests/runboard-demo.spec.ts:65:5 › failing: greeting has the wrong name (retry #1) (1.9s)
+
+
+  1) [chromium] › tests/runboard-demo.spec.ts:65:5 › failing: greeting has the wrong name ──────────
+
+    Error: expect(locator).toHaveText(expected) failed
+
+    Expected: "Hello Bob"
+    Received: "Hello Alice"
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Test was interrupted.
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/runboard-demo-failing-greeting-has-the-wrong-name-chromium-retry1/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/runboard-demo-failing-greeting-has-the-wrong-name-chromium-retry1/trace.zip
+
+  2 failed
+    [chromium] › tests/runboard-demo.spec.ts:65:5 › failing: greeting has the wrong name ───────────
+    [chromium] › tests/runboard-demo.spec.ts:72:5 › failing: missing element ───────────────────────
+  2 flaky
+    [chromium] › tests/runboard-demo.spec.ts:53:5 › flaky: fails on first try, passes on retry ─────
+    [chromium] › tests/runboard-demo.spec.ts:59:5 › flaky: list count only right on retry ──────────
+  6 passed (14.9s)
+  1 error was not a part of any test, see above for details
+`
+
+// Stopped mid-run in Playwright's format (list.js prints an interrupted result with ✘; base.js lists it
+// under "N interrupted"): one test cut off on its first attempt, two never started.
+const STOPPED_MID_RUN = `Running 5 tests using 2 workers
+
+  ✓  1 [chromium] › tests/a.spec.ts:10:5 › A › one (1.0s)
+  ✘  2 [chromium] › tests/a.spec.ts:20:5 › A › two (2.0s)
+  ✘  3 [chromium] › tests/a.spec.ts:30:5 › A › three (500ms)
+
+  1) [chromium] › tests/a.spec.ts:20:5 › A › two ───────────────────────────────
+
+    Error: expect(received).toBe(expected)
+
+  1 failed
+    [chromium] › tests/a.spec.ts:20:5 › A › two ────────────────────────────────
+  1 interrupted
+    [chromium] › tests/a.spec.ts:30:5 › A › three ──────────────────────────────
+  2 did not run
+  1 passed (3.0s)
+`
+
+const finishedBand = async (
+  $: Parameters<Parameters<typeof test>[1]>[0],
+  on: Parameters<Parameters<typeof test>[1]>[1],
+  output: string,
+) => {
+  const clock = mock.clock(on)
+  on('tool.call', () => BACKGROUNDED)
+  on('ui.render', () => ({ type: 'Box', children: [] }))
+  on('fs.read', () => ({ value: output }))
+  on('fs.stat', statReport)
+
+  await $.tool.call({ tool: 'Bash', command: 'npx playwright test' })
+  await clock.advance(2_000)
+
+  return $.ui.mount({ ...BAND, surface: 'terminal' })
+}
+
+const squares = async (ui: Awaited<ReturnType<typeof finishedBand>>) =>
+  (await ui.findAll({ type: 'Text', text: /^[■□] $/ })).map(cell =>
+    cell.props.color === 'gray' && cell.props.dimColor === true ? 'empty' : cell.props.color,
+  )
+
+test('a run stopped mid-run keeps interrupted and never-started tests apart from failures', async ($, on) => {
+  const ui = await finishedBand($, on, STOPPED_MID_RUN)
+  expect(await text(ui, /^ \(stopped\) $/)).toBeDefined()
+  expect(await text(ui, /done/)).toBeUndefined()
+  expect(await text(ui, /^1 passed$/)).toBeDefined()
+  expect(await text(ui, /^1 failed$/)).toBeDefined()
+  expect(await text(ui, /^ · 1 interrupted$/)).toBeDefined()
+  expect(await text(ui, /^ · 2 not run$/)).toBeDefined()
+  // Two of five got a result: the interrupted one doesn't count as done.
+  expect(await text(ui, / · 2\/5$/)).toBeDefined()
+  expect(await text(ui, /^40%$/)).toBeDefined()
+  expect(await squares(ui)).toEqual(['green', 'red', 'magenta', 'empty', 'empty'])
+
+  await ui.press({ key: 'details' })
+  expect(await text(ui, /^✘ a\.spec\.ts:20  A › two  2\.0s/)).toBeDefined()
+  expect(await text(ui, /^⊘ a\.spec\.ts:30  A › three  500ms \(interrupted\)/)).toBeDefined()
+  expect(await text(ui, /^  Test was interrupted\.$/)).toBeDefined()
+  await ui.unmount()
+})
+
+test('a run stopped during a retry keeps the completed results and the failure behind the retry', async ($, on) => {
+  const ui = await finishedBand($, on, STOPPED_IN_RETRY)
+  expect(await text(ui, /^ \(stopped\) $/)).toBeDefined()
+  expect(await text(ui, /^6 passed$/)).toBeDefined()
+  expect(await text(ui, /^2 failed$/)).toBeDefined()
+  expect(await text(ui, / · 2 flaky$/)).toBeDefined()
+  expect(await text(ui, /interrupted/)).toBeUndefined()
+  expect(await text(ui, /not run/)).toBeUndefined()
+  expect(await text(ui, / · 10\/10$/)).toBeDefined()
+
+  await ui.press({ key: 'details' })
+  // The interrupted retry has no error of its own; the failed attempt before it explains the failure.
+  expect(await text(ui, /^  expect\(locator\)\.toHaveText\(expected\) failed · Expected: "Hello Bob" · Received: "Hello Alice"$/)).toBeDefined()
+  await ui.unmount()
+})
+
+test('a run that finished every test ends as done, not stopped', async ($, on) => {
+  const ui = await finishedBand($, on, FINISHED)
+  expect(await text(ui, /^ \(done\) $/)).toBeDefined()
+  expect(await text(ui, /stopped/)).toBeUndefined()
+  expect(await text(ui, /not run/)).toBeUndefined()
   await ui.unmount()
 })
 
@@ -370,7 +513,7 @@ test('once the run is done, Open report shows the report from the html outputFol
   on('fs.stat', ($, e) => {
     statted.push(e.path.replaceAll('\\', '/'))
 
-    return FRESH_REPORT
+    return statReport($, e)
   })
   on('process.spawn', async function* ($, e) {
     spawned.push(e.argv)
@@ -397,7 +540,7 @@ test('without an html outputFolder in the config, Open report uses the default f
   on('tool.call', () => BACKGROUNDED)
   on('ui.render', () => ({ type: 'Box', children: [] }))
   on('fs.read', ($, e) => ({ value: e.path.endsWith('playwright.config.ts') ? "reporter: [['list'], ['html']]," : FINISHED }))
-  on('fs.stat', () => FRESH_REPORT)
+  on('fs.stat', statReport)
   on('process.spawn', async function* ($, e) {
     spawned.push(e.argv)
 
@@ -498,7 +641,8 @@ const runWithReport = async (
   on('tool.call', () => BACKGROUNDED)
   on('ui.render', () => ({ type: 'Box', children: [] }))
   on('fs.read', ($, e) => ({ value: e.path.endsWith('playwright.config.ts') ? "reporter: [['list'], ['html']]," : FINISHED }))
-  on('fs.stat', () => {
+  on('fs.stat', ($, e) => {
+    if (!e.path.endsWith('index.html')) throw new Error('ENOENT')
     const answer = stat()
     if (answer === null) throw new Error('ENOENT')
 
@@ -650,7 +794,7 @@ const finishedRun = async (
 
     return { value: { code, signal: null } }
   })
-  on('fs.stat', () => FRESH_REPORT)
+  on('fs.stat', statReport)
   on('ui.toast', ($, e) => {
     toasts.push(e.text)
 
@@ -737,6 +881,162 @@ test('a failure header padded with a ─ rule, as Playwright writes it, still ge
   await ui.unmount()
 
   expect(spawned.map(child => child.argv)).toEqual([['npx', 'playwright', 'show-trace', 'test-results/a-WS03/trace.zip']])
+})
+
+test("Open report and Trace run the project's own Playwright CLI with node when it's installed", async ($, on) => {
+  const clock = mock.clock(on)
+  const spawned: (readonly string[])[] = []
+  on('tool.call', () => BACKGROUNDED)
+  on('ui.render', () => ({ type: 'Box', children: [] }))
+  on('session.cwd', () => ({ value: '/home/me/shop' }))
+  on('fs.read', ($, e) => ({ value: e.path.endsWith('playwright.config.ts') ? "reporter: [['list'], ['html']]," : WITH_TRACE }))
+  on('fs.stat', ($, e) => {
+    const path = e.path.replaceAll('\\', '/')
+    if (path.endsWith('index.html') || path.endsWith('node_modules/@playwright/test/cli.js')) return FRESH_REPORT
+    throw new Error('ENOENT')
+  })
+  on('process.spawn', async function* ($, e) {
+    spawned.push(e.argv)
+
+    return { value: { code: 0, signal: null } }
+  })
+
+  await $.tool.call({ tool: 'Bash', command: 'npx playwright test' })
+  await clock.advance(2_000)
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 'report' })
+  await ui.press({ key: 'details' })
+  await ui.press({ key: 'trace-0' })
+  await clock.settle()
+  await ui.unmount()
+
+  expect(spawned).toEqual([
+    ['node', '/home/me/shop/node_modules/@playwright/test/cli.js', 'show-report'],
+    ['node', '/home/me/shop/node_modules/@playwright/test/cli.js', 'show-trace', 'test-results/a-WS03/trace.zip'],
+  ])
+})
+
+test('a crash toast names the error, not the source location Node opens with', async ($, on) => {
+  const { ui, clock, toasts } = await finishedRun($, on, {
+    command: 'npx playwright test',
+    sessionCwd: '/home/me/shop',
+    spawn: () => ({
+      chunks: [
+        {
+          stream: 'stderr',
+          text: 'node:net:1940\n    const ex = new UVExceptionWithHostPort(err, \'listen\', address, port);\n\nError: listen EADDRINUSE: address already in use ::1:9323\n    at Server.setupListenHandle\n',
+        },
+      ],
+      code: 1,
+    }),
+  })
+  await ui.press({ key: 'report' })
+  await clock.settle()
+  await ui.unmount()
+
+  expect(toasts).toEqual(['show-report failed: Error: listen EADDRINUSE: address already in use ::1:9323'])
+})
+
+for (const [name, answer, toast] of [
+  ['denied', { deny: 'the person declined' }, "Stop run wasn't allowed: the person declined"],
+  ['failed', { result: 'No task found with ID: b1', isError: true, text: 'No task found with ID: b1' }, 'Stop run failed: No task found with ID: b1'],
+] as const) {
+  test(`when TaskStop is ${name}, Stop run says so instead of doing nothing`, async ($, on) => {
+    const clock = mock.clock(on)
+    const toasts: string[] = []
+    on('tool.call', ($, e) => (e.tool === 'TaskStop' ? answer : BACKGROUNDED))
+    on('process.run', () => ({
+      value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+    }))
+    on('ui.render', () => ({ type: 'Box', children: [] }))
+    on('fs.read', () => ({ value: MIDWAY }))
+    on('ui.toast', ($, e) => {
+      toasts.push(e.text)
+
+      return { value: undefined }
+    })
+
+    await $.tool.call({ tool: 'Bash', command: 'npx playwright test --project=chromium' })
+    await clock.advance(2_000)
+
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    await ui.press({ key: 'stop' })
+    await ui.unmount()
+
+    expect(toasts).toEqual([toast])
+  })
+}
+
+test("on Windows Stop ends the run's own Playwright process tree, and the run ends as stopped", async ($, on) => {
+  const clock = mock.clock(on)
+  const ran: { argv: readonly string[]; env?: Record<string, string> }[] = []
+  const tools: string[] = []
+  const toasts: string[] = []
+  let output = 'Running 3 tests using 1 worker\n\n  ✓  1 [chromium] › tests\\a.spec.ts:10:5 › A › one (1.0s)\n'
+  on('tool.call', ($, e) => {
+    tools.push(e.tool)
+
+    return BACKGROUNDED
+  })
+  on('process.run', ($, e) => {
+    ran.push({ argv: e.argv, env: e.init?.env })
+    // sh finds no process group on Windows; the PowerShell kill finds the run.
+    const exitCode = e.argv[0] === 'powershell' ? 0 : 1
+
+    return { value: { exitCode, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('ui.render', () => ({ type: 'Box', children: [] }))
+  on('session.cwd', () => ({ value: 'G:\\Documents\\shop' }))
+  on('fs.read', () => ({ value: output }))
+  on('ui.toast', ($, e) => {
+    toasts.push(e.text)
+
+    return { value: undefined }
+  })
+
+  await $.tool.call({ tool: 'Bash', command: 'npx playwright test', run_in_background: true })
+  await clock.advance(2_000)
+
+  const running = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await running.press({ key: 'stop' })
+  await running.unmount()
+
+  expect(ran.map(call => call.argv[0])).toEqual(['sh', 'powershell'])
+  expect(ran[1]?.env).toEqual({ RUNBOARD_DIR: 'G:\\Documents\\shop' })
+  expect(tools).toEqual(['Bash'])
+  expect(toasts).toEqual([])
+
+  // The killed tree ends the task with no summary and no [killed] line.
+  output += '\n[exited with code 1]\n'
+  await clock.advance(2_000)
+  const stopped = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await text(stopped, /^ \(stopped\) $/)).toBeDefined()
+  expect(await text(stopped, /^ · 2 not run$/)).toBeDefined()
+  await stopped.unmount()
+})
+
+test('off Windows Stop never runs the PowerShell kill', async ($, on) => {
+  const clock = mock.clock(on)
+  const ran: string[] = []
+  on('tool.call', ($, e) => (e.tool === 'TaskStop' ? { result: { message: 'stopped' } } : BACKGROUNDED))
+  on('process.run', ($, e) => {
+    ran.push(e.argv[0] ?? '')
+
+    return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('ui.render', () => ({ type: 'Box', children: [] }))
+  on('session.cwd', () => ({ value: '/home/me/shop' }))
+  on('fs.read', () => ({ value: MIDWAY }))
+
+  await $.tool.call({ tool: 'Bash', command: 'npx playwright test', run_in_background: true })
+  await clock.advance(2_000)
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 'stop' })
+  await ui.unmount()
+
+  expect(ran).toEqual(['sh'])
 })
 
 test('when show-report fails, a toast says why instead of the button doing nothing', async ($, on) => {

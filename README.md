@@ -5,12 +5,17 @@ band follows the run as it goes:
 
 ![The Runboard band above the Claude Code prompt after a run: 8 passed, 2 failed, 2 flaky](docs/runboard-band-v2.png)
 
-- One square per test: green passed, red failed, yellow flaky (passed on retry), hollow skipped,
-  pulsing blue running, dim not run yet.
+- One square per test: green passed, red failed, yellow flaky (passed on retry), magenta
+  interrupted (the run stopped in the middle of it), hollow skipped, pulsing blue running, dim not run
+  yet.
 - Progress, counts, elapsed time and an ETA once 5 tests are done.
 - `Stop run` interrupts the run as Ctrl+C does, so the report still covers the tests that ran; once it
   ends, `Open report` opens the HTML report.
 - `Details` lists failed and flaky tests with their error and a `Trace` button that opens the trace.
+- A run that ends before every test ran (`Stop run`, `--max-failures`, a global timeout) says
+  `(stopped)` instead of `(done)`. Its completed results stay; interrupted and never-started tests are
+  counted apart from failures (`1 interrupted · 2 not run`) and don't count toward `n/total`, so a
+  partial run never looks like a fully evaluated suite.
 - Keeps following the run through `/reload-plugins`; clears itself 3 minutes after the run ends.
 
 ## Install
@@ -59,6 +64,11 @@ then `/reload-plugins` in a running session.
 - `Stop run` sends SIGINT to the run's process group and falls back to stopping the background task if
   no run process is found. It goes through Claude Code's permission check, so the first press may ask
   for approval.
+- **On Windows `Stop run` can't interrupt gently**: there's no SIGINT for another process there. It
+  ends the run's own Playwright process tree instead (the `playwright test` under the run's folder,
+  found with PowerShell). The tests that finished keep their results and the band says `(stopped)`,
+  but Playwright writes no HTML report for that run. TaskStop alone isn't enough on Windows: it ends
+  the shell while Playwright keeps going, and every test left fails with a crashed worker.
 - `Open report` runs `npx playwright show-report`, passing the html reporter's `outputFolder` from
   `playwright.config` when it sets one (otherwise Playwright's default `playwright-report`).
 - `Open report` and `Trace` run in the folder the run ran in: the session's, or where a leading

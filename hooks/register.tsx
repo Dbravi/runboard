@@ -32,7 +32,7 @@ const PROGRESS_LINE = /^\[\d+\/\d+\]\s/m
 const TASK_END_LINE = /^\[(?:killed|exited with code \d+)\]$/m
 const OUTPUT_PATH = /Output is being written to: (\S+\.output)/
 const TASK_ID = /running in background with ID: (\S+?)\./
-const CELL_COLOR = { '✓': 'green', '✘': 'red', '-': 'gray', '~': 'yellow', running: 'cyan' } as const
+const CELL_COLOR = { '✓': 'green', '✘': 'red', '-': 'gray', '~': 'yellow', '!': 'magenta', running: 'cyan' } as const
 
 // Playwright pads the header with a ─ rule to the terminal's width, which isn't part of the title.
 const FAILURE_HEADER = /^  \d+\) (.+?)\s*─*\s*$/
@@ -45,7 +45,9 @@ const failureDetails = (output: string) => {
   const flush = () => {
     if (title === null) return
     const attempt = lines.slice(lines.findLastIndex(line => /^\s+Retry #\d+/.test(line)) + 1)
-    const find = (pattern: RegExp) => attempt.map(line => pattern.exec(line)?.[1]).find(Boolean)
+    // A retry the run was stopped in has no error of its own; the attempt before it says why it failed.
+    const source = attempt.some(line => line.trim() === INTERRUPTED_ERROR) ? lines : attempt
+    const find = (pattern: RegExp) => source.map(line => pattern.exec(line)?.[1]).find(Boolean)
     const expected = find(/^\s+Expected: (.*)$/)
     const received = find(/^\s+Received: (.*)$/)
     details.set(title, {
@@ -70,6 +72,36 @@ const failureDetails = (output: string) => {
   return details
 }
 
+const PROBLEM_COLOR = { '✘': 'red', '~': 'yellow', '!': 'magenta' } as const
+const PROBLEM_NOTE = { '✘': '', '~': ' (passed on retry)', '!': ' (interrupted)' } as const
+const INTERRUPTED_HEADER = /^ {2}\d+ interrupted\s*$/
+const LISTED_TEST = /^ {4}(\[.+?)\s*─*\s*$/
+const INTERRUPTED_ERROR = 'Test was interrupted.'
+// Playwright's own words for a run that ended before every test ran; a task killed before the summary
+// (Stop falling back to TaskStop) says nothing, so its [killed] line stands in.
+const STOPPED_LINE = /^\s+\d+ (?:interrupted|did not run)\b|Testing stopped early/m
+const KILLED_LINE = /^\[killed\]$/m
+
+// The tests listed under the summary's "N interrupted" line, once each time they're listed.
+const interruptedTitles = (output: string) => {
+  const titles: string[] = []
+  let isListing = false
+  for (const line of output.split('\n')) {
+    if (INTERRUPTED_HEADER.test(line)) {
+      isListing = true
+    } else if (isListing) {
+      const listed = LISTED_TEST.exec(line)?.[1]
+      if (listed === undefined) {
+        isListing = false
+      } else {
+        titles.push(listed)
+      }
+    }
+  }
+
+  return titles
+}
+
 const tally = (output: string) => {
   // Keyed by title and occurrence, so a retry replaces the attempt before it and a pass after a failure
   // is flaky, while `--repeat-each` repeats of one title each keep their own square.
@@ -90,24 +122,36 @@ const tally = (output: string) => {
     }
   }
 
+  // A test the run was stopped in has a ✘ line like a failure; the summary lists it under "interrupted".
+  // One whose earlier attempt really failed stays failed there, as Playwright counts it.
+  for (const title of interruptedTitles(output)) {
+    const last = [...results.values()].findLast(result => result.title === title && result.mark === '✘')
+    if (last !== undefined) last.mark = '!'
+  }
+
   const all = [...results.values()].map(result => result.mark)
   const started = RUN_LINE.exec(output)
   const total = Number(started?.[1] ?? all.length)
   const details = failureDetails(output)
+  const hasSummary = SUMMARY_LINE.test(output)
 
   return {
     passed: all.filter(mark => mark === '✓').length,
     failed: all.filter(mark => mark === '✘').length,
     flaky: all.filter(mark => mark === '~').length,
     skipped: all.filter(mark => mark === '-').length,
+    interrupted: all.filter(mark => mark === '!').length,
     remaining: Math.max(0, total - all.length),
     workers: Number(started?.[2] ?? 0),
     marks: all,
     problems: [...results.values()].flatMap(({ title, mark, duration }): Problem[] =>
-      mark === '✘' || mark === '~' ? [{ mark, title, duration, error: '', trace: '', ...details.get(title) }] : [],
+      mark === '✘' || mark === '~' || mark === '!'
+        ? [{ mark, title, duration, error: mark === '!' ? INTERRUPTED_ERROR : '', trace: '', ...details.get(title) }]
+        : [],
     ),
-    needsListReporter: all.length === 0 && (PROGRESS_LINE.test(output) || SUMMARY_LINE.test(output)),
-    isDone: SUMMARY_LINE.test(output) || TASK_END_LINE.test(output),
+    needsListReporter: all.length === 0 && (PROGRESS_LINE.test(output) || hasSummary),
+    isStopped: STOPPED_LINE.test(output) || (KILLED_LINE.test(output) && !hasSummary),
+    isDone: hasSummary || TASK_END_LINE.test(output),
   }
 }
 
@@ -235,9 +279,27 @@ const showFromRun = async (child: HookStream<ProcessSpawnChunk, ProcessSpawnResu
   for await (const { text } of child) output += text
   const { code } = await child.result
   if (code !== null && code !== 0) {
-    const line = output.replace(ANSI_CODES, '').split('\n').map(text => text.trim()).find(Boolean)
-    throw new Error(line ?? `exited with code ${code}`)
+    const lines = output.replace(ANSI_CODES, '').split('\n').map(text => text.trim()).filter(Boolean)
+    // Node opens a crash with a source location ("node:net:1940"); the error line says what went wrong.
+    throw new Error(lines.find(line => ERROR_LINE.test(line)) ?? lines[0] ?? `exited with code ${code}`)
   }
+}
+
+const ERROR_LINE = /\b(?:\w*Error|E[A-Z]{3,})\b|No report found/
+
+// The project's own Playwright CLI, run with node: one process, so ending it ends the server. `npx` on
+// Windows runs it through cmd.exe, and ending npx leaves the server holding its port, so the next
+// `Open report` fails with EADDRINUSE.
+const PLAYWRIGHT_CLIS = ['node_modules/@playwright/test/cli.js', 'node_modules/playwright/cli.js']
+
+const playwright = async ($: EngineInterface, cwd: string | undefined, args: string[]) => {
+  for (const cli of PLAYWRIGHT_CLIS) {
+    const path = cwd === undefined ? cli : `${cwd}/${cli}`
+    const isThere = await $.fs.stat(path).then(({ kind }) => kind === 'file', () => false)
+    if (isThere) return ['node', path, ...args]
+  }
+
+  return ['npx', 'playwright', ...args]
 }
 
 let report: HookStream<ProcessSpawnChunk, ProcessSpawnResult> | null = null
@@ -246,7 +308,8 @@ const openReport = async ($: EngineInterface, cwd: string | undefined) => {
   const folder = await reportFolder($, cwd)
   // show-report serves until killed, so a second press restarts it to reopen the browser.
   void report?.return(undefined as never)
-  const child = $.process.spawn({ argv: ['npx', 'playwright', 'show-report', ...folder], cwd })
+  const argv = await playwright($, cwd, ['show-report', ...folder])
+  const child = $.process.spawn({ argv, cwd })
   report = child
   try {
     await showFromRun(child)
@@ -256,8 +319,8 @@ const openReport = async ($: EngineInterface, cwd: string | undefined) => {
   }
 }
 
-const openTrace = ($: EngineInterface, trace: string, cwd: string | undefined) =>
-  showFromRun($.process.spawn({ argv: ['npx', 'playwright', 'show-trace', trace], cwd }))
+const openTrace = async ($: EngineInterface, trace: string, cwd: string | undefined) =>
+  showFromRun($.process.spawn({ argv: await playwright($, cwd, ['show-trace', trace]), cwd }))
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
@@ -266,10 +329,46 @@ const message = (error: unknown) => (error instanceof Error ? error.message : St
 const SIGINT_RUN = `pgid=$(ps -o pgid= -p "$(pgrep -f 'playwright[ ]test' | head -1)" 2>/dev/null | tr -d ' ')
 [ -n "$pgid" ] && kill -INT -"$pgid"`
 
-const stopRun = async ($: EngineInterface, taskId: string | null) => {
+// Windows has no SIGINT for another process, and TaskStop there ends the shell but not Playwright: the
+// run goes on, its workers crash on the console's Ctrl+C and every test left fails. So end the run's
+// own Playwright process tree (its CLI's `test` command, under the run's folder) outright. No report
+// gets written, as with any kill.
+const KILL_RUN_ON_WINDOWS = String.raw`$dir = $env:RUNBOARD_DIR
+$runs = Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object {
+  $_.CommandLine -and $_.CommandLine.Contains($dir) -and $_.CommandLine -match 'cli\.js"?\s+test(\s|$)'
+}
+foreach ($run in $runs) { taskkill /PID $run.ProcessId /T /F | Out-Null }
+if (-not $runs) { exit 1 }`
+
+const killRunOnWindows = ($: EngineInterface, cwd: string | undefined) =>
+  cwd === undefined || !WINDOWS_PATH.test(cwd)
+    ? Promise.resolve(false)
+    : $.process
+        .run(['powershell', '-NoProfile', '-NonInteractive', '-Command', KILL_RUN_ON_WINDOWS], {
+          env: { RUNBOARD_DIR: cwd.replaceAll('/', '\\') },
+        })
+        .then(({ exitCode }) => exitCode === 0, () => false)
+
+// The run Stop was pressed on: when it ends with tests left, it was stopped, whatever its output says.
+let stopPressedOn: string | null = null
+
+// Says why when no way stopped the run, so the button never just does nothing.
+const stopRun = async ($: EngineInterface, taskId: string | null, cwd: string | undefined) => {
+  stopPressedOn = taskId
   const stopped = await $.process.run(['sh', '-c', SIGINT_RUN]).then(({ exitCode }) => exitCode === 0, () => false)
-  if (!stopped && taskId !== null) {
-    await $.tool.call({ tool: 'TaskStop', task_id: taskId })
+  if (stopped || (await killRunOnWindows($, cwd))) return
+  if (taskId === null) {
+    $.ui.toast('Stop run found no run to stop')
+
+    return
+  }
+  const ended: object = await $.tool.call({ tool: 'TaskStop', task_id: taskId }).catch((error: unknown) => ({ error }))
+  if ('deny' in ended) {
+    $.ui.toast(`Stop run wasn't allowed: ${String(ended.deny)}`)
+  } else if ('error' in ended) {
+    $.ui.toast(`Stop run failed: ${message(ended.error)}`)
+  } else if ('isError' in ended && ended.isError === true) {
+    $.ui.toast(`Stop run failed: ${'text' in ended ? String(ended.text) : 'TaskStop failed'}`)
   }
 }
 
@@ -307,8 +406,10 @@ const track = ($: EngineInterface, followed: Followed) => {
     }
 
     const isActive = !isFinal && !isDone && now - changedAt < IDLE_MS
+    const isStopPressed = followed.taskId !== null && stopPressedOn === followed.taskId
     await update($, counts, () => ({
       ...tallied,
+      isStopped: tallied.isStopped || (isStopPressed && tallied.remaining > 0),
       hasRetries: followed.hasRetries,
       command: followed.command,
       cwd: followed.cwd,
@@ -444,12 +545,13 @@ export const register: Register = on => {
     const isOpen = await read($, isDetailsOpen)
     const took = asDuration(run.updatedAt - run.startedAt)
     const total = run.marks.length + run.remaining
-    const done = run.marks.length
+    // An interrupted test didn't get to a result, so it doesn't count as done.
+    const done = run.marks.filter(mark => mark !== '!').length
     const eta =
       run.isActive && done >= ETA_AFTER && run.remaining > 0
         ? ((run.updatedAt - run.startedAt) / done) * run.remaining
         : null
-    const percent = total === 0 ? 0 : Math.floor((run.marks.length / total) * 100)
+    const percent = total === 0 ? 0 : Math.floor((done / total) * 100)
     // Playwright only reports finished tests, so the next `workers` slots stand in for the ones in flight.
     const running = run.isActive ? Math.min(run.workers, run.remaining) : 0
     const cells: (Mark | 'running' | undefined)[] = [
@@ -488,7 +590,13 @@ export const register: Register = on => {
           )}
           <Text color={PLAYWRIGHT_RED}>Run</Text>
           <Text color={PLAYWRIGHT_GREEN}>board</Text>
-          <Text dimColor>{run.isActive ? ' ' : ' (done) '}</Text>
+          {run.isActive ? (
+            <Text> </Text>
+          ) : run.isStopped === true ? (
+            <Text color="yellow"> (stopped) </Text>
+          ) : (
+            <Text dimColor> (done) </Text>
+          )}
           <Text bold>{percent}%</Text>
           <Text dimColor> · </Text>
           <Text color="green">{run.passed} passed</Text>
@@ -502,11 +610,13 @@ export const register: Register = on => {
               · {run.flaky} flaky
             </Text>
           )}
+          {run.interrupted > 0 && <Text color="magenta"> · {run.interrupted} interrupted</Text>}
           {run.skipped > 0 && <Text color="gray"> · {run.skipped} skipped</Text>}
+          {!run.isActive && run.remaining > 0 && <Text color="gray"> · {run.remaining} not run</Text>}
           {total > 0 && (
             <Text dimColor>
               {' '}
-              · {run.marks.length}/{total}
+              · {done}/{total}
             </Text>
           )}
           <Text dimColor> · {took}</Text>
@@ -521,7 +631,7 @@ export const register: Register = on => {
                 label="Stop run"
                 plain
                 hover={{ color: 'white', backgroundColor: '#8B0000' }}
-                onPress={() => void stopRun($, run.taskId)}
+                onPress={() => void stopRun($, run.taskId, run.cwd)}
               />
               <Text> ]</Text>
             </Box>
@@ -572,9 +682,9 @@ export const register: Register = on => {
             return (
               <Box flexDirection="column">
                 <Box>
-                  <Text color={problem.mark === '✘' ? 'red' : 'yellow'} wrap="truncate-end">
-                    {problem.mark} {where}  {name}  {problem.duration}
-                    {problem.mark === '~' ? ' (passed on retry)' : ''}{' '}
+                  <Text color={PROBLEM_COLOR[problem.mark]} wrap="truncate-end">
+                    {problem.mark === '!' ? '⊘' : problem.mark} {where}  {name}  {problem.duration}
+                    {PROBLEM_NOTE[problem.mark]}{' '}
                   </Text>
                   {problem.trace !== '' && (
                     <Button
