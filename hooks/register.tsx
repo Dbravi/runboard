@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, HookStream, ProcessSpawnChunk, ProcessSpawnResult, Register, Timer } from 'claude-code'
+import type { EngineInterface, HookStream, ProcessSpawnChunk, ProcessSpawnResult, Register, RenderElement, Timer } from 'claude-code'
 
 import type { Followed, Mark, Problem } from '../types'
 
@@ -540,6 +540,15 @@ export const register: Register = on => {
     }
 
     const { Box, Button, Text } = $.ui.resolve(e)
+    // The band shares its place above the prompt: what the plugins beneath draw there (a usage line,
+    // say) stays, under Runboard's rows, instead of disappearing for the length of a run.
+    const below = await next(e).catch(() => null)
+    const stack = (band: RenderElement) => (
+      <Box flexDirection="column">
+        {band}
+        {below}
+      </Box>
+    )
     const tick = await read($, frame)
     const isDim = Math.floor(tick / PULSE_FRAMES) % 2 === 1
     const isOpen = await read($, isDetailsOpen)
@@ -564,7 +573,7 @@ export const register: Register = on => {
     )
 
     if (run.needsListReporter) {
-      return (
+      return stack(
         <Box flexDirection="column">
           <Text dimColor wrap="truncate-end">
             $ {run.command}
@@ -579,7 +588,7 @@ export const register: Register = on => {
       )
     }
 
-    return (
+    return stack(
       <Box flexDirection="column">
         <Text dimColor wrap="truncate-end">
           $ {run.command}

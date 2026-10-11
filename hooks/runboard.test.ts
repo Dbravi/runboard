@@ -124,6 +124,23 @@ test('a foreground run is counted from its result once it returns', async ($, on
   await ui.unmount()
 })
 
+test('what the plugins beneath draw above the prompt stays visible under the band', async ($, on) => {
+  const clock = mock.clock(on)
+  on('tool.call', () => BACKGROUNDED)
+  on('ui.render', () => ({ type: 'Text', props: {}, children: ['session 26% · week 66%'] }))
+  on('fs.read', () => ({ value: MIDWAY }))
+
+  await $.tool.call({ tool: 'Bash', command: 'npx playwright test --project=chromium' })
+  await clock.advance(2_000)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...BAND, surface })
+    expect(await text(ui, /1 passed/)).toBeDefined()
+    expect(await text(ui, /^session 26% · week 66%$/)).toBeDefined()
+    await ui.unmount()
+  }
+})
+
 test('the band stays out of the way until a Playwright run starts', async ($, on) => {
   const clock = mock.clock(on)
   on('tool.call', () => BACKGROUNDED)
