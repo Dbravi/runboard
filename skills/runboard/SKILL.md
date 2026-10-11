@@ -19,16 +19,7 @@ toast saying so. Run the tests anyway, and leave the config and the reporters as
 - Don't add `--reporter` or reporter environment variables to get the band.
 
 When you report the result, mention once that the band needs the `list` reporter
-(`reporter: [['list'], ['html', { open: 'never' }]]`) if the user wants it. That change is theirs to make.
-
-**Warn about the html report server.** If the config uses the `html` reporter without
-`open: 'never'`, then outside CI a run with a failing test doesn't exit: Playwright opens the report
-in the browser and serves it until Ctrl+C. A background run then never sends its completion
-notification. Before starting such a run, tell the user in one line that the report will open in
-their browser and the run will wait there if a test fails. If the run then sits after its summary
-(the output file ends with `Serving HTML report at …`), report the results from the output file and
-say the report server is still running; stopping that task now loses nothing, since the report is
-already written.
+(`reporter: [['list'], ['html']]`) if the user wants it. That change is theirs to make.
 
 ## Start runs so the band works
 

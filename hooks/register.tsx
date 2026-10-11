@@ -174,7 +174,7 @@ const runFolder = (sessionCwd: string, command: string, home: string | undefined
 }
 
 const NEEDS_LIST_REPORTER =
-  "Runboard is off for this run: it needs the list reporter in playwright.config, e.g. reporter: [['list'], ['html', { open: 'never' }]]"
+  "Runboard is off for this run: it needs the list reporter in playwright.config, e.g. reporter: [['list'], ['html']]"
 const REPORTER_FLAG = /--reporter[= ](\S+)/
 const REPORTER_KEY = /\breporter\s*:/
 const LIST_REPORTER = /['"`]list['"`]/
@@ -437,7 +437,7 @@ export const register: Register = on => {
             <Text color={PLAYWRIGHT_RED}>Run</Text>
             <Text color={PLAYWRIGHT_GREEN}>board</Text>
             <Text> needs the list reporter in playwright.config: </Text>
-            <Text bold>{"reporter: [['list'], ['html', { open: 'never' }]]"}</Text>
+            <Text bold>reporter: [['list'], ['html']]</Text>
           </Box>
         </Box>
       )

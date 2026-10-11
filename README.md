@@ -41,8 +41,7 @@ then `/reload-plugins` in a running session.
   `dot`, `line` or `html` it can't count tests. Playwright uses `list` by default locally and `dot` on CI.
   When the config sets reporters without `list`, Runboard stays off for that run and a toast says so;
   it never changes your config or reporters. With `reporter: 'html'` alone, use
-  `reporter: [['list'], ['html', { open: 'never' }]]` (`open: 'never'` keeps a run with a failing test
-  from waiting on the report server, so Claude hears when it ends).
+  `reporter: [['list'], ['html']]`.
 - **Runs started by Claude.** Runboard sees commands Claude runs, not the ones you type in your own
   terminal. Live updates need a background run (Claude starts long runs that way); a foreground run
   only shows the final result.
