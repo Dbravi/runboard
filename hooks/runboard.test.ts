@@ -386,7 +386,7 @@ test('without an html outputFolder in the config, Open report uses the default f
   const spawned: (readonly string[])[] = []
   on('tool.call', () => BACKGROUNDED)
   on('ui.render', () => ({ type: 'Box', children: [] }))
-  on('fs.read', ($, e) => ({ value: e.path.endsWith('playwright.config.ts') ? "reporter: 'html'," : FINISHED }))
+  on('fs.read', ($, e) => ({ value: e.path.endsWith('playwright.config.ts') ? "reporter: [['list'], ['html']]," : FINISHED }))
   on('process.spawn', async function* ($, e) {
     spawned.push(e.argv)
 
@@ -402,6 +402,79 @@ test('without an html outputFolder in the config, Open report uses the default f
   await ui.unmount()
 
   expect(spawned).toEqual([['npx', 'playwright', 'show-report']])
+})
+
+// Each case: the config's text (null: no config) and the command; whether Runboard follows the run.
+for (const [name, config, command, isFollowed] of [
+  ['no reporter in the config means the local default, list', 'export default defineConfig({ retries: 1 })', 'npx playwright test', true],
+  ['the config names list', "reporter: [['list'], ['html']],", 'npx playwright test', true],
+  ['the config picks list locally', "reporter: process.env.CI ? 'dot' : 'list',", 'npx playwright test', true],
+  ['no config to read', null, 'npx playwright test', true],
+  ['html alone', "reporter: 'html',", 'npx playwright test', false],
+  ['html alone, list only in a comment', "// reporter: 'list',\n  /* or 'list' */\n  reporter: [['html', { open: 'never' }]],", 'npx playwright test', false],
+  ['a --reporter flag without list', "reporter: [['list'], ['html']],", 'npx playwright test --reporter=dot', false],
+  ['a --reporter flag with list', "reporter: 'html',", 'npx playwright test --reporter=list,html', true],
+] as const) {
+  test(`${isFollowed ? 'follows' : 'stays off, with a toast,'}: ${name}`, async ($, on) => {
+    const clock = mock.clock(on)
+    const commands: string[] = []
+    const toasts: string[] = []
+    on('tool.call', ($, e) => {
+      if (e.tool === 'Bash') commands.push(e.command)
+
+      return BACKGROUNDED
+    })
+    on('ui.render', () => ({ type: 'Box', children: [] }))
+    on('session.cwd', () => ({ value: '/home/me/shop' }))
+    on('fs.read', ($, e) => {
+      if (/playwright\.config\.\w+$/.test(e.path)) {
+        if (config === null || !e.path.endsWith('.ts')) throw new Error('ENOENT')
+
+        return { value: config }
+      }
+
+      return { value: MIDWAY }
+    })
+    on('ui.toast', ($, e) => {
+      toasts.push(e.text)
+
+      return { value: undefined }
+    })
+
+    await $.tool.call({ tool: 'Bash', command, run_in_background: true })
+    await clock.advance(2_000)
+
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    expect((await text(ui, /1 passed/)) !== undefined).toBe(isFollowed)
+    await ui.unmount()
+
+    expect(commands).toEqual([command])
+    expect(toasts).toEqual(isFollowed ? [] : [expect.stringContaining("needs the list reporter in playwright.config")])
+  })
+}
+
+test('the reporter is read from the folder the run cds into', async ($, on) => {
+  const clock = mock.clock(on)
+  const toasts: string[] = []
+  on('tool.call', () => BACKGROUNDED)
+  on('ui.render', () => ({ type: 'Box', children: [] }))
+  on('session.cwd', () => ({ value: '/home/me' }))
+  on('fs.read', ($, e) => {
+    if (e.path.replaceAll('\\', '/').endsWith('/home/me/shop/playwright.config.ts')) return { value: "reporter: 'html'," }
+    if (/playwright\.config\.\w+$/.test(e.path)) throw new Error('ENOENT')
+
+    return { value: MIDWAY }
+  })
+  on('ui.toast', ($, e) => {
+    toasts.push(e.text)
+
+    return { value: undefined }
+  })
+
+  await $.tool.call({ tool: 'Bash', command: 'cd shop && npx playwright test', run_in_background: true })
+  await clock.advance(2_000)
+
+  expect(toasts).toHaveLength(1)
 })
 
 test('Details shows the last error of each failure and opens its trace', async ($, on) => {

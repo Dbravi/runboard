@@ -173,6 +173,31 @@ const runFolder = (sessionCwd: string, command: string, home: string | undefined
   return target.startsWith('/') || WINDOWS_PATH.test(target) ? target : `${sessionCwd}/${target}`
 }
 
+const NEEDS_LIST_REPORTER =
+  "Runboard is off for this run: it needs the list reporter in playwright.config, e.g. reporter: [['list'], ['html', { open: 'never' }]]"
+const REPORTER_FLAG = /--reporter[= ](\S+)/
+const REPORTER_KEY = /\breporter\s*:/
+const LIST_REPORTER = /['"`]list['"`]/
+const COMMENTS = /\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gm
+
+// Whether the run will print the list reporter's lines Runboard counts: a `--reporter` flag decides,
+// else the config. No `reporter` there means Playwright's local default, `list`; a config that names
+// it anywhere (`process.env.CI ? 'dot' : 'list'`) gets the benefit of the doubt, and so does no config.
+const hasListReporter = async ($: EngineInterface, command: string, cwd: string | undefined) => {
+  const flag = REPORTER_FLAG.exec(command)?.[1]
+  if (flag !== undefined) return flag.split(',').includes('list')
+  for (const config of ['playwright.config.ts', 'playwright.config.js', 'playwright.config.mjs', 'playwright.config.cjs']) {
+    const text = await $.fs.read(cwd === undefined ? config : `${cwd}/${config}`).catch(() => undefined)
+    if (text !== undefined) {
+      const code = text.replace(COMMENTS, '')
+
+      return !REPORTER_KEY.test(code) || LIST_REPORTER.test(code)
+    }
+  }
+
+  return true
+}
+
 // Windows keeps the home folder in USERPROFILE when HOME isn't set.
 const homeFolder = async ($: EngineInterface) =>
   ((await $.env.get('HOME').catch(() => undefined)) ?? (await $.env.get('USERPROFILE').catch(() => undefined))) ||
@@ -328,18 +353,26 @@ export const register: Register = on => {
       return next(e)
     }
 
+    const command = unpiped(e.command, e.run_in_background)
+    // Unknown, the buttons fall back to the session's folder at the time they're pressed.
+    const cwd = await $.session.cwd().then(
+      async sessionCwd => runFolder(sessionCwd, command, await homeFolder($)),
+      () => undefined,
+    )
+    // Runboard never changes the user's config or reporters: without `list` it stays off and says why.
+    if (!(await hasListReporter($, command, cwd))) {
+      $.ui.toast(NEEDS_LIST_REPORTER, { timeoutMs: 10_000 })
+
+      return next(e)
+    }
+
     await update($, isDetailsOpen, () => false)
     await update($, following, () => null)
-    const command = unpiped(e.command, e.run_in_background)
     const followed: Followed = {
       path: '',
       taskId: null,
       command,
-      // Unknown, the buttons fall back to the session's folder at the time they're pressed.
-      cwd: await $.session.cwd().then(
-        async cwd => runFolder(cwd, command, await homeFolder($)),
-        () => undefined,
-      ),
+      cwd,
       startedAt: await $.clock.now(),
       hasRetries: Number(/--retries[= ](\d+)/.exec(command)?.[1] ?? 0) > 0,
     }
@@ -404,7 +437,7 @@ export const register: Register = on => {
             <Text color={PLAYWRIGHT_RED}>Run</Text>
             <Text color={PLAYWRIGHT_GREEN}>board</Text>
             <Text> needs the list reporter in playwright.config: </Text>
-            <Text bold>reporter: [['list'], ['html']]</Text>
+            <Text bold>{"reporter: [['list'], ['html', { open: 'never' }]]"}</Text>
           </Box>
         </Box>
       )

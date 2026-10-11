@@ -9,6 +9,27 @@ Runboard draws a live band above the prompt for every Playwright run you start w
 progress, pass/fail/flaky counts, one square per test, an ETA, a `Stop run` button, failure details
 with traces, and `Open report` once the run ends. You don't call it; it reacts to your Bash commands.
 
+## Never change the user's Playwright setup
+
+Runboard counts tests from the `list` reporter's lines. When the run's `playwright.config` sets
+reporters without `list` (say `reporter: 'html'` alone), Runboard stays off for that run and shows a
+toast saying so. Run the tests anyway, and leave the config and the reporters as they are:
+
+- Don't edit `playwright.config`, not even temporarily, and don't offer to.
+- Don't add `--reporter` or reporter environment variables to get the band.
+
+When you report the result, mention once that the band needs the `list` reporter
+(`reporter: [['list'], ['html', { open: 'never' }]]`) if the user wants it. That change is theirs to make.
+
+**Warn about the html report server.** If the config uses the `html` reporter without
+`open: 'never'`, then outside CI a run with a failing test doesn't exit: Playwright opens the report
+in the browser and serves it until Ctrl+C. A background run then never sends its completion
+notification. Before starting such a run, tell the user in one line that the report will open in
+their browser and the run will wait there if a test fails. If the run then sits after its summary
+(the output file ends with `Serving HTML report at …`), report the results from the output file and
+say the report server is still running; stopping that task now loses nothing, since the report is
+already written.
+
 ## Start runs so the band works
 
 - **Run in the background** (`run_in_background: true`). Runboard reads the background task's output
@@ -22,6 +43,8 @@ with traces, and `Open report` once the run ends. You don't call it; it reacts t
   afterwards instead. A line-buffered `grep` is fine and is left alone.
 - **One run at a time.** A new run takes over the band, and Playwright runs sharing an output folder
   break each other. Stop the current run first.
+- **A leading `cd <dir> &&` is fine**: `cd "/path/to/project" && npx playwright test`. Runboard
+  remembers that folder, so `Open report` and `Trace` find the report there.
 - `--list` and `--ui` are ignored on purpose; they don't run tests.
 
 ## While a run is going
@@ -33,10 +56,22 @@ with traces, and `Open report` once the run ends. You don't call it; it reacts t
   the background task with TaskStop kills it outright and leaves no report.
 - `/reload-plugins` doesn't lose the run: Runboard resumes following it after a reload.
 
+## When it ends
+
+- A run with a failing test exits with code 1, so its task shows as failed. That's the tests, not the
+  run: report the counts and the failed and flaky test names. Get them from the summary at the end of
+  the output file (`grep -E "^\s+[0-9]+ (passed|failed|flaky|skipped)"` and the lines under it)
+  rather than reading the whole log.
+
 ## Reading the band when the user asks
 
 - Squares: green passed, red failed, yellow flaky (failed then passed on retry), hollow skipped,
   pulsing blue running (one per worker), dim not run yet.
 - `Details` lists failed and flaky tests with their last error and a `Trace` button; it appears only
   when something failed, and errors and traces only once the run has ended.
+- `Trace` shows only where Playwright recorded a trace. With the usual `trace: 'on-first-retry'`, that
+  needs retries: a run without them has no traces (`--retries=1` adds them), and a flaky test has none
+  either, since its listed attempt is the first one. Say so if the user asks where the traces are.
+- If `Open report` or `Trace` can't open (no report yet, a deleted trace), a toast says why. The band
+  itself doesn't change.
 - The band clears itself 3 minutes after the run ends.

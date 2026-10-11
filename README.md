@@ -39,8 +39,10 @@ then `/reload-plugins` in a running session.
 - **Claude Code 2.1.291 or newer** (`claude update`).
 - **The Playwright `list` reporter** in `playwright.config.ts`. Runboard reads its output; with only
   `dot`, `line` or `html` it can't count tests. Playwright uses `list` by default locally and `dot` on CI.
-  Without it the band says so instead of counting; with `reporter: 'html'` alone, use
-  `reporter: [['list'], ['html']]`.
+  When the config sets reporters without `list`, Runboard stays off for that run and a toast says so;
+  it never changes your config or reporters. With `reporter: 'html'` alone, use
+  `reporter: [['list'], ['html', { open: 'never' }]]` (`open: 'never'` keeps a run with a failing test
+  from waiting on the report server, so Claude hears when it ends).
 - **Runs started by Claude.** Runboard sees commands Claude runs, not the ones you type in your own
   terminal. Live updates need a background run (Claude starts long runs that way); a foreground run
   only shows the final result.
