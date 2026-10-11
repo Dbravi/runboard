@@ -34,7 +34,8 @@ const OUTPUT_PATH = /Output is being written to: (\S+\.output)/
 const TASK_ID = /running in background with ID: (\S+?)\./
 const CELL_COLOR = { '✓': 'green', '✘': 'red', '-': 'gray', '~': 'yellow', running: 'cyan' } as const
 
-const FAILURE_HEADER = /^  \d+\) (.+?)\s*$/
+// Playwright pads the header with a ─ rule to the terminal's width, which isn't part of the title.
+const FAILURE_HEADER = /^  \d+\) (.+?)\s*─*\s*$/
 
 // Playwright's end-of-run section per failed or flaky test; the last attempt (after "Retry #n") wins.
 const failureDetails = (output: string) => {
@@ -149,11 +150,39 @@ const unpiped = (command: string, background: boolean | undefined) =>
 
 const HTML_OUTPUT_FOLDER = /['"]html['"]\s*,\s*\{[^}]*?outputFolder:\s*['"]([^'"]+)['"]/
 
+// A leading `cd <dir> &&` (or `;`) moves the run out of the session's folder.
+const LEADING_CD = /^\s*cd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))\s*(?:&&|;)/
+const WINDOWS_PATH = /^[A-Za-z]:[\\/]/
+const GIT_BASH_DRIVE = /^\/([A-Za-z])(?=\/|$)/
+// The shell expands these before `cd` sees them: `~/x`, `$HOME/x`, `${HOME}/x`.
+const HOME_PREFIX = /^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/
+
+// The folder the run runs in, absolute: the session's, or where the command's leading `cd` goes.
+// Git Bash spells G:\x as /g/x, which the host can't use as a working directory on Windows.
+// Another variable, or the home folder when it isn't known, can't be followed, so the session's stands.
+const runFolder = (sessionCwd: string, command: string, home: string | undefined) => {
+  const cd = LEADING_CD.exec(command)
+  // Single quotes keep `~` and `$` as written; double quotes still expand `$HOME`.
+  const quoted = cd?.[2]
+  const expandable = cd?.[1] ?? cd?.[3]
+  const dir = quoted ?? (home === undefined ? expandable : expandable?.replace(HOME_PREFIX, home))
+  if (dir === undefined || (quoted === undefined && (/^~/.test(dir) || dir.includes('$')))) return sessionCwd
+  const isWindows = WINDOWS_PATH.test(sessionCwd)
+  const target = isWindows ? dir.replace(GIT_BASH_DRIVE, (_, drive: string) => `${drive.toUpperCase()}:`) : dir
+
+  return target.startsWith('/') || WINDOWS_PATH.test(target) ? target : `${sessionCwd}/${target}`
+}
+
+// Windows keeps the home folder in USERPROFILE when HOME isn't set.
+const homeFolder = async ($: EngineInterface) =>
+  ((await $.env.get('HOME').catch(() => undefined)) ?? (await $.env.get('USERPROFILE').catch(() => undefined))) ||
+  undefined
+
 // show-report ignores the config, so pass the html reporter's outputFolder when the config sets one.
-const reportFolder = async ($: EngineInterface) => {
+const reportFolder = async ($: EngineInterface, cwd: string | undefined) => {
   for (const config of ['playwright.config.ts', 'playwright.config.js', 'playwright.config.mjs']) {
     const folder = await $.fs
-      .read(config)
+      .read(cwd === undefined ? config : `${cwd}/${config}`)
       .then(text => HTML_OUTPUT_FOLDER.exec(text)?.[1])
       .catch(() => undefined)
     if (folder !== undefined) return [folder]
@@ -162,16 +191,38 @@ const reportFolder = async ($: EngineInterface) => {
   return []
 }
 
+// Runs a Playwright command in the run's folder; when it exits with an error, toasts the first line it
+// wrote ("No report found at …"), since a button that silently does nothing tells the person nothing.
+const showFromRun = async (child: HookStream<ProcessSpawnChunk, ProcessSpawnResult>) => {
+  let output = ''
+  for await (const { text } of child) output += text
+  const { code } = await child.result
+  if (code !== null && code !== 0) {
+    const line = output.replace(ANSI_CODES, '').split('\n').map(text => text.trim()).find(Boolean)
+    throw new Error(line ?? `exited with code ${code}`)
+  }
+}
+
 let report: HookStream<ProcessSpawnChunk, ProcessSpawnResult> | null = null
 
-const openReport = async ($: EngineInterface) => {
-  const folder = await reportFolder($)
+const openReport = async ($: EngineInterface, cwd: string | undefined) => {
+  const folder = await reportFolder($, cwd)
   // show-report serves until killed, so a second press restarts it to reopen the browser.
   void report?.return(undefined as never)
-  const child = $.process.spawn({ argv: ['npx', 'playwright', 'show-report', ...folder] })
+  const child = $.process.spawn({ argv: ['npx', 'playwright', 'show-report', ...folder], cwd })
   report = child
-  for await (const chunk of child) void chunk
+  try {
+    await showFromRun(child)
+  } catch (error) {
+    // The press that restarted it closed this one; that's not a failure to report.
+    if (report === child) throw error
+  }
 }
+
+const openTrace = ($: EngineInterface, trace: string, cwd: string | undefined) =>
+  showFromRun($.process.spawn({ argv: ['npx', 'playwright', 'show-trace', trace], cwd }))
+
+const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
 // SIGINT the run's whole process group, as Ctrl+C does, so Playwright runs its reporters and writes the
 // report; the bracket in the pattern keeps this shell from matching itself. TaskStop only kills outright.
@@ -220,6 +271,7 @@ const track = ($: EngineInterface, followed: Followed) => {
       ...tallied,
       hasRetries: followed.hasRetries,
       command: followed.command,
+      cwd: followed.cwd,
       taskId: followed.taskId,
       startedAt: followed.startedAt,
       updatedAt: now,
@@ -283,6 +335,11 @@ export const register: Register = on => {
       path: '',
       taskId: null,
       command,
+      // Unknown, the buttons fall back to the session's folder at the time they're pressed.
+      cwd: await $.session.cwd().then(
+        async cwd => runFolder(cwd, command, await homeFolder($)),
+        () => undefined,
+      ),
       startedAt: await $.clock.now(),
       hasRetries: Number(/--retries[= ](\d+)/.exec(command)?.[1] ?? 0) > 0,
     }
@@ -411,7 +468,7 @@ export const register: Register = on => {
                 label="Open report"
                 plain
                 onPress={() =>
-                  void openReport($).catch(error => $.ui.toast(`show-report failed: ${String(error)}`))
+                  void openReport($, run.cwd).catch(error => $.ui.toast(`show-report failed: ${message(error)}`))
                 }
               />
               <Text> ]</Text>
@@ -456,12 +513,11 @@ export const register: Register = on => {
                     <Button
                       key={`trace-${index}`}
                       label="Trace"
-                      onPress={() => {
-                        const child = $.process.spawn({ argv: ['npx', 'playwright', 'show-trace', problem.trace] })
-                        void (async () => {
-                          for await (const chunk of child) void chunk
-                        })().catch(error => $.ui.toast(`show-trace failed: ${String(error)}`))
-                      }}
+                      onPress={() =>
+                        void openTrace($, problem.trace, run.cwd).catch(error =>
+                          $.ui.toast(`show-trace failed: ${message(error)}`),
+                        )
+                      }
                     />
                   )}
                 </Box>

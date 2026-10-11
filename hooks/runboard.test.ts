@@ -456,6 +456,194 @@ test('Details shows the last error of each failure and opens its trace', async (
   expect(spawned).toEqual([['npx', 'playwright', 'show-trace', 'reports/test-results/a-WS03-retry1/trace.zip']])
 })
 
+const WITH_TRACE = `Running 1 test using 1 worker
+
+  ✘  1 [chromium] › tests/a.spec.ts:30:5 › A › WS03 - Adds @shop (2.0s)
+
+  1) [chromium] › tests/a.spec.ts:30:5 › A › WS03 - Adds @shop
+
+    Error: boom
+
+    attachment #1: trace (application/zip) ───
+    test-results/a-WS03/trace.zip
+
+  1 failed
+`
+
+// The engine resolves a read's path for the host (on Windows with a drive and backslashes), so compare the tail.
+const readsConfigIn = (read: string[], folder: string) => {
+  const slashed = (path: string) => path.replaceAll('\\', '/').replace(/^[A-Za-z]:/, '')
+
+  return read.some(path => slashed(path).endsWith(`${slashed(folder)}/playwright.config.ts`))
+}
+
+// Runs `command` in the background from a session in `sessionCwd`, then moves the session elsewhere, as
+// Claude Code does between turns, and opens the finished band; `spawn` answers each spawned child.
+const finishedRun = async (
+  $: Parameters<Parameters<typeof test>[1]>[0],
+  on: Parameters<Parameters<typeof test>[1]>[1],
+  { command, sessionCwd, spawn, output = WITH_TRACE, home }: {
+    command: string
+    sessionCwd: string
+    output?: string
+    home?: string
+    spawn?: () => { chunks: { stream: 'stdout' | 'stderr'; text: string }[]; code: number }
+  },
+) => {
+  const clock = mock.clock(on)
+  const spawned: { argv: readonly string[]; cwd: string | undefined }[] = []
+  const read: string[] = []
+  const toasts: string[] = []
+  let cwd = sessionCwd
+  on('tool.call', () => BACKGROUNDED)
+  on('ui.render', () => ({ type: 'Box', children: [] }))
+  on('session.cwd', () => ({ value: cwd }))
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? home : undefined }))
+  on('fs.read', ($, e) => {
+    read.push(e.path)
+
+    return { value: e.path.endsWith('playwright.config.ts') ? "reporter: [['list'], ['html']]," : output }
+  })
+  on('process.spawn', async function* ($, e) {
+    spawned.push({ argv: e.argv, cwd: e.cwd })
+    const { chunks, code } = spawn?.() ?? { chunks: [], code: 0 }
+    for (const chunk of chunks) yield chunk
+
+    return { value: { code, signal: null } }
+  })
+  on('ui.toast', ($, e) => {
+    toasts.push(e.text)
+
+    return { value: undefined }
+  })
+
+  await $.tool.call({ tool: 'Bash', command })
+  await clock.advance(2_000)
+  cwd = '/somewhere/else'
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+  return { ui, clock, spawned, read, toasts }
+}
+
+test('Open report and Trace run in the folder the run ran in, not where the session is now', async ($, on) => {
+  const { ui, clock, spawned, read } = await finishedRun($, on, {
+    command: 'npx playwright test',
+    sessionCwd: '/home/me/shop',
+  })
+  await ui.press({ key: 'report' })
+  await ui.press({ key: 'details' })
+  await ui.press({ key: 'trace-0' })
+  await clock.settle()
+  await ui.unmount()
+
+  expect(spawned).toEqual([
+    { argv: ['npx', 'playwright', 'show-report'], cwd: '/home/me/shop' },
+    { argv: ['npx', 'playwright', 'show-trace', 'test-results/a-WS03/trace.zip'], cwd: '/home/me/shop' },
+  ])
+  expect(readsConfigIn(read, '/home/me/shop')).toBe(true)
+})
+
+for (const [command, sessionCwd, expected] of [
+  ['cd e2e && npx playwright test', '/home/me/shop', '/home/me/shop/e2e'],
+  ["cd '/srv/app' ; npx playwright test", '/home/me/shop', '/srv/app'],
+  [
+    'cd "/g/Documents/Programming Projects/spp" && npx playwright test',
+    'G:\\Documents\\Programming Projects',
+    'G:/Documents/Programming Projects/spp',
+  ],
+  ['cd C:\\work\\spp && npx playwright test', 'G:\\Documents', 'C:\\work\\spp'],
+] as const) {
+  test(`a leading cd moves the run: ${command}`, async ($, on) => {
+    const { ui, clock, spawned, read } = await finishedRun($, on, { command, sessionCwd })
+    await ui.press({ key: 'report' })
+    await clock.settle()
+    await ui.unmount()
+
+    expect(spawned.map(child => child.cwd)).toEqual([expected])
+    expect(readsConfigIn(read, expected)).toBe(true)
+  })
+}
+
+for (const [command, home, expected] of [
+  ['cd ~/shop && npx playwright test', '/Users/me', '/Users/me/shop'],
+  ['cd "$HOME/my shop" && npx playwright test', '/Users/me', '/Users/me/my shop'],
+  ['cd ${HOME}/shop && npx playwright test', '/Users/me', '/Users/me/shop'],
+  ['cd ~ && npx playwright test', '/Users/me', '/Users/me'],
+  ["cd '~/shop' && npx playwright test", '/Users/me', '/Users/me/project/~/shop'],
+  ['cd ~/shop && npx playwright test', undefined, '/Users/me/project'],
+  ['cd $WORKSPACE/shop && npx playwright test', '/Users/me', '/Users/me/project'],
+] as const) {
+  test(`the home folder in a leading cd is followed: ${command} (HOME ${home ?? 'unset'})`, async ($, on) => {
+    const { ui, clock, spawned } = await finishedRun($, on, { command, sessionCwd: '/Users/me/project', home })
+    await ui.press({ key: 'report' })
+    await clock.settle()
+    await ui.unmount()
+
+    expect(spawned.map(child => child.cwd)).toEqual([expected])
+  })
+}
+
+test('a failure header padded with a ─ rule, as Playwright writes it, still gets its error and trace', async ($, on) => {
+  const { ui, clock, spawned } = await finishedRun($, on, {
+    command: 'npx playwright test',
+    sessionCwd: '/home/me/shop',
+    output: WITH_TRACE.replace(/^( {2}1\) .*?)\s*$/m, `$1 ${'─'.repeat(40)}`),
+  })
+  await ui.press({ key: 'details' })
+  expect(await text(ui, /^  boom$/)).toBeDefined()
+  await ui.press({ key: 'trace-0' })
+  await clock.settle()
+  await ui.unmount()
+
+  expect(spawned.map(child => child.argv)).toEqual([['npx', 'playwright', 'show-trace', 'test-results/a-WS03/trace.zip']])
+})
+
+test('when show-report fails, a toast says why instead of the button doing nothing', async ($, on) => {
+  const { ui, clock, toasts } = await finishedRun($, on, {
+    command: 'npx playwright test',
+    sessionCwd: '/home/me/shop',
+    spawn: () => ({
+      chunks: [{ stream: 'stderr', text: '\x1b[31mNo report found at "/home/me/shop/playwright-report"\x1b[39m\n' }],
+      code: 1,
+    }),
+  })
+  await ui.press({ key: 'report' })
+  await clock.settle()
+  await ui.unmount()
+
+  expect(toasts).toEqual(['show-report failed: No report found at "/home/me/shop/playwright-report"'])
+})
+
+test('when show-trace fails, a toast says why', async ($, on) => {
+  const { ui, clock, toasts } = await finishedRun($, on, {
+    command: 'npx playwright test',
+    sessionCwd: '/home/me/shop',
+    spawn: () => ({ chunks: [{ stream: 'stderr', text: '\nError: trace file not found\n  at x\n' }], code: 1 }),
+  })
+  await ui.press({ key: 'details' })
+  await ui.press({ key: 'trace-0' })
+  await clock.settle()
+  await ui.unmount()
+
+  expect(toasts).toEqual(['show-trace failed: Error: trace file not found'])
+})
+
+test('a report that opens, or one replaced by a second press, raises no toast', async ($, on) => {
+  const { ui, clock, spawned, toasts } = await finishedRun($, on, {
+    command: 'npx playwright test',
+    sessionCwd: '/home/me/shop',
+    spawn: () => ({ chunks: [{ stream: 'stdout', text: 'Serving HTML report at http://localhost:9323.\n' }], code: 0 }),
+  })
+  await ui.press({ key: 'report' })
+  await ui.press({ key: 'report' })
+  await clock.settle()
+  await ui.unmount()
+
+  expect(spawned).toHaveLength(2)
+  expect(toasts).toEqual([])
+})
+
 test('colour codes and Windows paths in the output still parse', async ($, on) => {
   const clock = mock.clock(on)
   const output = [

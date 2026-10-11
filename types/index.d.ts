@@ -2,7 +2,15 @@ export type Mark = '✓' | '✘' | '-' | '~'
 
 export type Problem = { mark: '✘' | '~'; title: string; duration: string; error: string; trace: string }
 
-export type Followed = { path: string; taskId: string | null; command: string; startedAt: number; hasRetries: boolean }
+// `cwd` is the folder the run ran in, absolute; absent on a run followed before it was recorded.
+export type Followed = {
+  path: string
+  taskId: string | null
+  command: string
+  cwd?: string
+  startedAt: number
+  hasRetries: boolean
+}
 
 export type RunCounts = {
   passed: number
@@ -12,6 +20,7 @@ export type RunCounts = {
   needsListReporter: boolean
   hasRetries: boolean
   command: string
+  cwd?: string
   taskId: string | null
   remaining: number
   workers: number

@@ -60,6 +60,8 @@ then `/reload-plugins` in a running session.
   for approval.
 - `Open report` runs `npx playwright show-report`, passing the html reporter's `outputFolder` from
   `playwright.config` when it sets one (otherwise Playwright's default `playwright-report`).
+- `Open report` and `Trace` run in the folder the run ran in: the session's, or where a leading
+  `cd <dir> &&` in the command went (`~` and `$HOME` included). If one fails, a toast says why.
 - Pass no `--reporter` flag to `playwright test`: it replaces the config's reporters, so no HTML
   report gets written.
 
