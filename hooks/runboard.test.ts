@@ -18,6 +18,9 @@ const BACKGROUNDED = {
   text: 'Command running in background with ID: b1. Output is being written to: /tmp/tasks/b1.output. You will be notified when it completes.',
 }
 
+// The html report's index.html, written after the run started.
+const FRESH_REPORT = { value: { kind: 'file', size: 1, mtimeMs: Number.MAX_SAFE_INTEGER, isLink: false } } as const
+
 const MIDWAY = `Running 4 tests using 1 worker
 
   ✓  1 [chromium] › tests/a.spec.ts:10:5 › A › WS01 - Browses @shop (29.8s)
@@ -356,6 +359,7 @@ test('Details lists the failed and flaky tests with file, name and duration', as
 test('once the run is done, Open report shows the report from the html outputFolder in the config', async ($, on) => {
   const clock = mock.clock(on)
   const spawned: (readonly string[])[] = []
+  const statted: string[] = []
   on('tool.call', () => BACKGROUNDED)
   on('ui.render', () => ({ type: 'Box', children: [] }))
   on('fs.read', ($, e) => ({
@@ -363,6 +367,11 @@ test('once the run is done, Open report shows the report from the html outputFol
       ? "reporter: [['list'], ['html', { outputFolder: './reports/html' }]],"
       : FINISHED,
   }))
+  on('fs.stat', ($, e) => {
+    statted.push(e.path.replaceAll('\\', '/'))
+
+    return FRESH_REPORT
+  })
   on('process.spawn', async function* ($, e) {
     spawned.push(e.argv)
 
@@ -379,6 +388,7 @@ test('once the run is done, Open report shows the report from the html outputFol
   await ui.unmount()
 
   expect(spawned).toEqual([['npx', 'playwright', 'show-report', './reports/html']])
+  expect(statted.some(path => path.endsWith('reports/html/index.html'))).toBe(true)
 })
 
 test('without an html outputFolder in the config, Open report uses the default folder', async ($, on) => {
@@ -387,6 +397,7 @@ test('without an html outputFolder in the config, Open report uses the default f
   on('tool.call', () => BACKGROUNDED)
   on('ui.render', () => ({ type: 'Box', children: [] }))
   on('fs.read', ($, e) => ({ value: e.path.endsWith('playwright.config.ts') ? "reporter: [['list'], ['html']]," : FINISHED }))
+  on('fs.stat', () => FRESH_REPORT)
   on('process.spawn', async function* ($, e) {
     spawned.push(e.argv)
 
@@ -475,6 +486,61 @@ test('the reporter is read from the folder the run cds into', async ($, on) => {
   await clock.advance(2_000)
 
   expect(toasts).toHaveLength(1)
+})
+
+// `stat` answers the report's index.html on each look: a value, or null for no file there.
+const runWithReport = async (
+  $: Parameters<Parameters<typeof test>[1]>[0],
+  on: Parameters<Parameters<typeof test>[1]>[1],
+  stat: () => typeof FRESH_REPORT | { value: { kind: 'file'; size: number; mtimeMs: number; isLink: boolean } } | null,
+) => {
+  const clock = mock.clock(on)
+  on('tool.call', () => BACKGROUNDED)
+  on('ui.render', () => ({ type: 'Box', children: [] }))
+  on('fs.read', ($, e) => ({ value: e.path.endsWith('playwright.config.ts') ? "reporter: [['list'], ['html']]," : FINISHED }))
+  on('fs.stat', () => {
+    const answer = stat()
+    if (answer === null) throw new Error('ENOENT')
+
+    return answer
+  })
+
+  await $.tool.call({ tool: 'Bash', command: 'npx playwright test' })
+  await clock.advance(2_000)
+
+  return clock
+}
+
+for (const [name, stat] of [
+  ['wrote no report', () => null],
+  ['left an older report (--reporter=list)', () => ({ value: { kind: 'file' as const, size: 1, mtimeMs: -1, isLink: false } })],
+] as const) {
+  test(`a run that ${name} shows no Open report`, async ($, on) => {
+    const clock = await runWithReport($, on, stat)
+    await clock.advance(60_000)
+
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    expect(await text(ui, /done/)).toBeDefined()
+    expect(await ui.find({ key: 'report' })).toBeUndefined()
+    await ui.unmount()
+  })
+}
+
+test('Open report appears once the report is written, which can be after the summary', async ($, on) => {
+  let looks = 0
+  const clock = await runWithReport($, on, () => (++looks < 3 ? null : FRESH_REPORT))
+
+  const early = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await early.find({ key: 'report' })).toBeUndefined()
+  await early.unmount()
+
+  await clock.advance(4_000)
+  const later = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await later.find({ key: 'report' })).toBeDefined()
+  await later.unmount()
+
+  await clock.advance(60_000)
+  expect(looks).toBe(3)
 })
 
 test('Details shows the last error of each failure and opens its trace', async ($, on) => {
@@ -584,6 +650,7 @@ const finishedRun = async (
 
     return { value: { code, signal: null } }
   })
+  on('fs.stat', () => FRESH_REPORT)
   on('ui.toast', ($, e) => {
     toasts.push(e.text)
 

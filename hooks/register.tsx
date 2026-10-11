@@ -216,6 +216,18 @@ const reportFolder = async ($: EngineInterface, cwd: string | undefined) => {
   return []
 }
 
+const REPORT_CHECKS = 15
+const ABSOLUTE_PATH = /^(?:\/|[A-Za-z]:[\\/])/
+
+// Whether this run wrote the html report: its index.html is newer than the run's start. A run with no
+// html reporter (`--reporter=list`, a config without it) leaves none or an old one, so no button.
+const reportWritten = async ($: EngineInterface, cwd: string | undefined, startedAt: number) => {
+  const folder = (await reportFolder($, cwd))[0] ?? 'playwright-report'
+  const path = cwd === undefined || ABSOLUTE_PATH.test(folder) ? folder : `${cwd}/${folder}`
+
+  return $.fs.stat(`${path}/index.html`).then(({ kind, mtimeMs }) => kind === 'file' && mtimeMs >= startedAt, () => false)
+}
+
 // Runs a Playwright command in the run's folder; when it exits with an error, toasts the first line it
 // wrote ("No report found at …"), since a button that silently does nothing tells the person nothing.
 const showFromRun = async (child: HookStream<ProcessSpawnChunk, ProcessSpawnResult>) => {
@@ -263,6 +275,7 @@ const stopRun = async ($: EngineInterface, taskId: string | null) => {
 
 let timer: Timer | null = null
 let hideTimer: Timer | null = null
+let reportTimer: Timer | null = null
 let frameTimer: Timer | null = null
 let runs = 0
 
@@ -272,6 +285,8 @@ const track = ($: EngineInterface, followed: Followed) => {
   timer = null
   hideTimer?.cancel()
   hideTimer = null
+  reportTimer?.cancel()
+  reportTimer = null
   frameTimer?.cancel()
   frameTimer = $.clock.every(FRAME_MS, () => void update($, frame, tick => tick + 1))
   runs += 1
@@ -317,6 +332,25 @@ const track = ($: EngineInterface, followed: Followed) => {
     frameTimer = null
     void update($, following, () => null)
     hideTimer = $.clock.after(HIDE_MS, () => void update($, counts, () => null))
+    watchReport()
+  }
+
+  // The list reporter prints the summary before the html reporter writes the report, so look for it a
+  // few times; `Open report` shows once this run's report is there.
+  const watchReport = () => {
+    let checks = 0
+    const check = async () => {
+      checks += 1
+      const isWritten = await reportWritten($, followed.cwd, followed.startedAt)
+      if (run !== runs) return
+      if (isWritten) await update($, counts, run => (run === null ? null : { ...run, hasReport: true }))
+      if (isWritten || checks >= REPORT_CHECKS) {
+        reportTimer?.cancel()
+        reportTimer = null
+      }
+    }
+    reportTimer = $.clock.every(TICK_MS, () => void check())
+    void check()
   }
 
   const poll = (path: string) => {
@@ -492,7 +526,7 @@ export const register: Register = on => {
               <Text> ]</Text>
             </Box>
           )}
-          {!run.isActive && done > 0 && (
+          {!run.isActive && done > 0 && run.hasReport === true && (
             <Box>
               <Text>[ </Text>
               <Text color="green">● </Text>

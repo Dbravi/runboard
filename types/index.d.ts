@@ -29,6 +29,8 @@ export type RunCounts = {
   startedAt: number
   updatedAt: number
   isActive: boolean
+  // Set once the run has ended and its html report is written.
+  hasReport?: boolean
 }
 
 declare module 'claude-code' {
