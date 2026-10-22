@@ -12,6 +12,8 @@ export type Followed = {
   cwd?: string
   startedAt: number
   hasRetries: boolean
+  // A shell script that runs Playwright, maybe several times; absent on a run followed before it was recorded.
+  isScript?: boolean
 }
 
 export type RunCounts = {

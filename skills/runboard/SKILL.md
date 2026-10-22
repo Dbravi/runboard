@@ -1,6 +1,6 @@
 ---
 name: runboard
-description: How to start, watch and stop Playwright test runs so the Runboard band above the prompt follows them live. Use whenever you run Playwright tests (`playwright test`, or an npm script that runs it) in a session where the Runboard plugin is installed, or when the user asks about the Runboard band.
+description: How to start, watch and stop Playwright test runs so the Runboard band above the prompt follows them live. Use whenever you run Playwright tests (`playwright test`, or an npm or shell script that runs it) in a session where the Runboard plugin is installed, or when the user asks about the Runboard band.
 ---
 
 # Running Playwright tests with Runboard
@@ -45,8 +45,9 @@ When you report the result, mention once that the band needs the `list` reporter
 
 - **Run in the background** (`run_in_background: true`). Runboard reads the background task's output
   file live. A foreground run only shows the final result once the command returns.
-- **Use `playwright test` or an npm script that runs it.** Both are detected:
-  `ENV=local npx playwright test tests/x --project=chromium`, `npm run test:local -- --retries=1`.
+- **Use `playwright test`, or an npm or shell script that runs it.** All are detected:
+  `ENV=local npx playwright test tests/x --project=chromium`, `npm run test:local -- --retries=1`,
+  `bash scripts/release.sh`. A script's Playwright runs add up in one band, which ends when the script does.
 - **Never pass `--reporter`.** It replaces the config's reporters for the run: without `html` in it,
   no HTML report is written and `Open report` doesn't appear.
 - **Don't pipe the run into `tail` or `head`.** They buffer the whole run, so nothing reaches the

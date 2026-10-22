@@ -24,10 +24,12 @@ const RESULT_LINE = /^\s*([✓✘-])\s+\d+\s+(.+?)(?:\s+\(retry #(\d+)\))?(?:\s+
 const TITLE_PARTS = /^\[[^\]]+\]\s+›\s+(?:\S*[\\/])?([^\\/\s]+):(\d+):\d+\s+›\s+(.*?)(?:\s+@\S+)*$/
 // Colour and cursor codes Playwright writes when it thinks it has a terminal (seen on Windows).
 const ANSI_CODES = /\x1b\[[0-9;?]*[A-Za-z]/g
-const RUN_LINE = /Running (\d+) tests? using (\d+) workers?/
+// A shell script that runs Playwright several times prints one of these per run.
+const RUN_LINE = /Running (\d+) tests? using (\d+) workers?/g
 const SUMMARY_LINE = /^\s+\d+ (?:passed|failed|flaky|skipped|interrupted|did not run)\b/m
-// The line/html reporters' "[3/15] …" progress; with no ✓/✘ lines it means the list reporter isn't on.
-const PROGRESS_LINE = /^\[\d+\/\d+\]\s/m
+// The line/html reporters' "[3/15] … › …" progress; with no ✓/✘ lines it means the list reporter isn't on.
+// The › keeps a script's own "[1/9] Running …" echo out.
+const PROGRESS_LINE = /^\[\d+\/\d+\]\s.*›/m
 // What Claude Code appends to a background task's output file when the command ends or is stopped.
 const TASK_END_LINE = /^\[(?:killed|exited with code \d+)\]$/m
 const OUTPUT_PATH = /Output is being written to: (\S+\.output)/
@@ -102,7 +104,8 @@ const interruptedTitles = (output: string) => {
   return titles
 }
 
-const tally = (output: string) => {
+// A script's run is done only when the script ends: each of its Playwright runs prints a summary.
+const tally = (output: string, isScript = false) => {
   // Keyed by title and occurrence, so a retry replaces the attempt before it and a pass after a failure
   // is flaky, while `--repeat-each` repeats of one title each keep their own square.
   const results = new Map<string, { title: string; mark: Mark; duration: string }>()
@@ -130,8 +133,8 @@ const tally = (output: string) => {
   }
 
   const all = [...results.values()].map(result => result.mark)
-  const started = RUN_LINE.exec(output)
-  const total = Number(started?.[1] ?? all.length)
+  const started = [...output.matchAll(RUN_LINE)]
+  const total = started.length === 0 ? all.length : started.reduce((sum, run) => sum + Number(run[1]), 0)
   const details = failureDetails(output)
   const hasSummary = SUMMARY_LINE.test(output)
 
@@ -142,7 +145,7 @@ const tally = (output: string) => {
     skipped: all.filter(mark => mark === '-').length,
     interrupted: all.filter(mark => mark === '!').length,
     remaining: Math.max(0, total - all.length),
-    workers: Number(started?.[2] ?? 0),
+    workers: Number(started.at(-1)?.[2] ?? 0),
     marks: all,
     problems: [...results.values()].flatMap(({ title, mark, duration }): Problem[] =>
       mark === '✘' || mark === '~' || mark === '!'
@@ -151,7 +154,7 @@ const tally = (output: string) => {
     ),
     needsListReporter: all.length === 0 && (PROGRESS_LINE.test(output) || hasSummary),
     isStopped: STOPPED_LINE.test(output) || (KILLED_LINE.test(output) && !hasSummary),
-    isDone: hasSummary || TASK_END_LINE.test(output),
+    isDone: (hasSummary && !isScript) || TASK_END_LINE.test(output),
   }
 }
 
@@ -167,11 +170,23 @@ const asDuration = (ms: number) => {
 const RUNS_TESTS = /\bplaywright\s+test\b/
 const NOT_A_RUN = /--(?:list|ui)\b/
 const NPM_SCRIPT = /\bnpm\s+(?:run(?:-script)?\s+(\S+)|(test)\b)/
+const SHELL_SCRIPT = /(?:^|&&|;)\s*(?:\w+=\S*\s+)*(?:(?:ba|z)?sh\s+)?((?:\.{0,2}\/|[\w.-]+\/)*[\w.-]+\.sh)\b/
+
+// A shell script counts when it runs `playwright test`, read from the folder the run runs in.
+const isScriptRun = async ($: EngineInterface, command: string, cwd: string | undefined) => {
+  const script = SHELL_SCRIPT.exec(command)?.[1]
+  if (script === undefined) return false
+  const path = cwd === undefined || ABSOLUTE_PATH.test(script) ? script : `${cwd}/${script}`
+  const body = await $.fs.read(path).catch(() => '')
+
+  return RUNS_TESTS.test(body) && !NOT_A_RUN.test(body)
+}
 
 // `npm run <script>` counts when that package.json script runs `playwright test`; `--list` and `--ui` never do.
-const isPlaywrightRun = async ($: EngineInterface, command: string) => {
+const isPlaywrightRun = async ($: EngineInterface, command: string, cwd: string | undefined) => {
   if (NOT_A_RUN.test(command)) return false
   if (RUNS_TESTS.test(command)) return true
+  if (await isScriptRun($, command, cwd)) return true
   const script = NPM_SCRIPT.exec(command)
   if (script === null) return false
   const scripts: Record<string, string> = await $.fs
@@ -399,7 +414,7 @@ const track = ($: EngineInterface, followed: Followed) => {
     }
 
     const now = await $.clock.now()
-    const { isDone, ...tallied } = tally(output.replace(ANSI_CODES, ''))
+    const { isDone, ...tallied } = tally(output.replace(ANSI_CODES, ''), followed.isScript)
     if (output !== seen) {
       seen = output
       changedAt = now
@@ -484,16 +499,16 @@ export const register: Register = on => {
   })
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-    if (!(await isPlaywrightRun($, e.command))) {
-      return next(e)
-    }
-
     const command = unpiped(e.command, e.run_in_background)
     // Unknown, the buttons fall back to the session's folder at the time they're pressed.
     const cwd = await $.session.cwd().then(
       async sessionCwd => runFolder(sessionCwd, command, await homeFolder($)),
       () => undefined,
     )
+    if (!(await isPlaywrightRun($, e.command, cwd))) {
+      return next(e)
+    }
+
     // Runboard never changes the user's config or reporters: without `list` it stays off and says why.
     if (!(await hasListReporter($, command, cwd))) {
       $.ui.toast(NEEDS_LIST_REPORTER, { timeoutMs: 10_000 })
@@ -510,6 +525,7 @@ export const register: Register = on => {
       cwd,
       startedAt: await $.clock.now(),
       hasRetries: Number(/--retries[= ](\d+)/.exec(command)?.[1] ?? 0) > 0,
+      isScript: !RUNS_TESTS.test(command) && (await isScriptRun($, command, cwd)),
     }
     const tracker = track($, followed)
 

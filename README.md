@@ -55,6 +55,8 @@ then `/reload-plugins` in a running session.
 
 - A command containing `playwright test`, e.g. `ENV=local npx playwright test tests/x --project=chromium`.
 - `npm run <script>` or `npm test`, when that script in `package.json` runs `playwright test`.
+- A shell script (`bash scripts/release.sh`, `./scripts/release.sh`) that runs `playwright test`, once or several times;
+  its runs add up in one band, which ends when the script exits.
 - Ignored: `--list` and `--ui` (they don't run tests), and every other command.
 
 ## Good to know

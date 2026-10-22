@@ -1370,3 +1370,88 @@ test('each failing repeat is listed separately in Details, with its own duration
   expect(await text(ui, /2\.5s/)).toBeDefined()
   await ui.unmount()
 })
+
+const RELEASE_SCRIPT = `npx playwright test --project=shop --reporter=list,blob
+npx playwright test -g "@smoke" --project=shop --reporter=list,blob
+`
+
+const FIRST_STEP_DONE = `[1/2] Running all tests...
+Running 2 tests using 2 workers
+
+  ✓  1 [shop] › tests/a.spec.ts:10:5 › A › WS01 - Browses (29.8s)
+  ✓  2 [shop] › tests/a.spec.ts:20:5 › A › WS02 - Explores (14.4s)
+
+  2 passed (31.0s)
+Exit code for first script: 0
+
+[2/2] Running smoke tests...
+`
+
+const SECOND_STEP_DONE = `${FIRST_STEP_DONE}Running 1 test using 1 worker
+
+  ✘  1 [shop] › tests/a.spec.ts:10:5 › A › WS01 - Browses (29.8s)
+
+  1 failed
+Exit code for second script: 1
+
+[exited with code 1]
+`
+
+for (const [command, script, isTracked] of [
+  ['bash scripts/release.sh', RELEASE_SCRIPT, true],
+  ['cd /repo && ./scripts/release.sh', RELEASE_SCRIPT, true],
+  ['CI=1 sh scripts/release.sh', RELEASE_SCRIPT, true],
+  ['bash scripts/deploy.sh', 'kubectl apply -f k8s/\n', false],
+  ['bash scripts/list.sh', 'npx playwright test --list\n', false],
+] as const) {
+  test(`${isTracked ? 'tracks' : 'ignores'} a shell script: ${command}`, async ($, on) => {
+    const clock = mock.clock(on)
+    on('tool.call', () => BACKGROUNDED)
+    on('ui.render', () => ({ type: 'Box', children: [] }))
+    on('fs.read', ($, e) => ({ value: e.path.endsWith('.sh') ? script : MIDWAY }))
+
+    await $.tool.call({ tool: 'Bash', command })
+    await clock.advance(2_000)
+
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    expect((await text(ui, /1 passed/)) !== undefined).toBe(isTracked)
+    await ui.unmount()
+  })
+}
+
+test("a shell script's runs add up in one band, which ends with the script, not the first summary", async ($, on) => {
+  const clock = mock.clock(on)
+  let output = '[1/2] Running all tests...\n'
+  on('tool.call', () => BACKGROUNDED)
+  on('ui.render', () => ({ type: 'Box', children: [] }))
+  on('fs.read', ($, e) => ({ value: e.path.endsWith('.sh') ? RELEASE_SCRIPT : output }))
+
+  await $.tool.call({ tool: 'Bash', command: 'bash scripts/release.sh' })
+  await clock.advance(2_000)
+
+  const starting = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await text(starting, /needs the list reporter/)).toBeUndefined()
+  await starting.unmount()
+
+  output = FIRST_STEP_DONE
+  await clock.advance(2_000)
+  const between = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await text(between, /2 passed/)).toBeDefined()
+  expect(await text(between, /done/)).toBeUndefined()
+  await between.unmount()
+
+  output = `${FIRST_STEP_DONE}Running 1 test using 1 worker\n`
+  await clock.advance(2_000)
+  const second = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await text(second, /2\/3/)).toBeDefined()
+  await second.unmount()
+
+  output = SECOND_STEP_DONE
+  await clock.advance(2_000)
+  const done = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await text(done, /2 passed/)).toBeDefined()
+  expect(await text(done, /1 failed/)).toBeDefined()
+  expect(await text(done, /3\/3/)).toBeDefined()
+  expect(await text(done, /done/)).toBeDefined()
+  await done.unmount()
+})
