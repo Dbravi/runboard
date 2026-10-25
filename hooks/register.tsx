@@ -182,8 +182,21 @@ const isScriptRun = async ($: EngineInterface, command: string, cwd: string | un
   return RUNS_TESTS.test(body) && !NOT_A_RUN.test(body)
 }
 
+// Heredoc bodies and quoted strings are data, not commands: `grep "playwright test"` or a script that
+// mentions it doesn't run tests. Quoted paths and values stay as empty quotes, so the words around them still count.
+// The quoted command of `bash -c "…"` (or `sh`/`zsh -c`) is a command, so it is unwrapped first.
+const HEREDOC = /<<-?\s*(['"]?)(\w+)\1([^\n]*)\n[\s\S]*?\n[ \t]*\2[ \t]*(?=\n|$)/g
+const SHELL_C = /\b(?:ba|z)?sh\s+-\w*c\w*\s+(?:'([^']*)'|"((?:[^"\\]|\\.)*)")/g
+const QUOTED = /'[^']*'|"(?:[^"\\]|\\.)*"/g
+const commandWords = (command: string) =>
+  command
+    .replace(HEREDOC, '$3')
+    .replace(SHELL_C, (_, single?: string, double?: string) => ` ${single ?? double ?? ''} `)
+    .replace(QUOTED, '""')
+
 // `npm run <script>` counts when that package.json script runs `playwright test`; `--list` and `--ui` never do.
-const isPlaywrightRun = async ($: EngineInterface, command: string, cwd: string | undefined) => {
+const isPlaywrightRun = async ($: EngineInterface, fullCommand: string, cwd: string | undefined) => {
+  const command = commandWords(fullCommand)
   if (NOT_A_RUN.test(command)) return false
   if (RUNS_TESTS.test(command)) return true
   if (await isScriptRun($, command, cwd)) return true

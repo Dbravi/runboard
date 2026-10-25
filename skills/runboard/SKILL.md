@@ -1,6 +1,6 @@
 ---
 name: runboard
-description: How to start, watch and stop Playwright test runs so the Runboard band above the prompt follows them live. Use whenever you run Playwright tests (`playwright test`, or an npm or shell script that runs it) in a session where the Runboard plugin is installed, or when the user asks about the Runboard band.
+description: Rules for starting, watching and stopping a Playwright test run so the Runboard band above the prompt follows it live. Use only when you are about to run `playwright test` (or an npm or shell script that runs it) with the Bash tool, or when the user asks about the Runboard band. Not for writing, explaining or discussing tests.
 ---
 
 # Running Playwright tests with Runboard

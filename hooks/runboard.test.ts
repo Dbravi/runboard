@@ -155,6 +155,47 @@ test('the band stays out of the way until a Playwright run starts', async ($, on
   await ui.unmount()
 })
 
+for (const command of [
+  `grep -n "playwright test" hooks/register.tsx`,
+  `git commit -m "Run playwright test in the background"`,
+  `python - <<'EOF'\nprint("npx playwright test")\nEOF`,
+  `cat <<EOF > notes.md\nnpx playwright test tests/a.spec.ts\nEOF`,
+]) {
+  test(`a command that only mentions playwright test starts no band: ${command.split('\n')[0]}`, async ($, on) => {
+    const clock = mock.clock(on)
+    on('tool.call', () => BACKGROUNDED)
+    on('ui.render', () => ({ type: 'Box', children: [] }))
+    on('fs.read', () => ({ value: MIDWAY }))
+
+    await $.tool.call({ tool: 'Bash', command })
+    await clock.advance(2_000)
+
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    expect(await text(ui, /passed/)).toBeUndefined()
+    await ui.unmount()
+  })
+}
+
+for (const command of [
+  `ENV="local" npx playwright test "tests/a.spec.ts" -g 'Browses'`,
+  `bash -c "npx playwright test tests/a.spec.ts"`,
+  `sh -lc 'cd app && npx playwright test'`,
+]) {
+  test(`a run with quotes is still followed: ${command}`, async ($, on) => {
+    const clock = mock.clock(on)
+    on('tool.call', () => BACKGROUNDED)
+    on('ui.render', () => ({ type: 'Box', children: [] }))
+    on('fs.read', () => ({ value: MIDWAY }))
+
+    await $.tool.call({ tool: 'Bash', command })
+    await clock.advance(2_000)
+
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    expect(await text(ui, /passed/)).toBeDefined()
+    await ui.unmount()
+  })
+}
+
 test('a test that fails every attempt stays failed', async ($, on) => {
   mock.clock(on)
   const output = `Running 1 test using 1 worker
